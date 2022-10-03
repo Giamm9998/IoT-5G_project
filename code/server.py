@@ -28,8 +28,8 @@ class ClientThread(threading.Thread):
         print("New connection added: ", clientAddress)
         # crypto settings
         self.key = b'0123456789abcdef'
-        self.iv = b'a'*16
-        self.cipher = AES.new(self.key, AES.MODE_CBC, self.iv)
+        self.nonce = b'a'*11
+        self.cipher = AES.new(self.key, AES.MODE_CCM, self.nonce)
 
     def run(self):
         print("Connection from : ", clientAddress)
@@ -40,26 +40,36 @@ class ClientThread(threading.Thread):
 
         # send session key
         s_key = os.urandom(16)
-        s_cipher = AES.new(s_key, AES.MODE_CBC, self.iv)
+        s_cipher = AES.new(s_key, AES.MODE_CCM, self.nonce)
         print('Session key: ', s_key)
-        msg = self.cipher.encrypt(s_key)
+        # self.cipher.update(s_key)
+        msg = self.cipher.encrypt(s_key)+b'|'+self.cipher.digest()
         self.csocket.send(msg)
 
         # receive authenticator
-        data = self.csocket.recv(2048)
-        auth = bytes_to_long(unpad(s_cipher.decrypt(data), 16))
+        data = self.csocket.recv(2048).split(b'|')
+        auth = bytes_to_long(unpad(s_cipher.decrypt(data[0]), 16))
+        # s_cipher.update(auth)
+        # MAC verification
+        try:
+            s_cipher.verify(data[1])
+        except ValueError:
+            print('MAC ERROR')
+            exit(0)
         print(Fore.GREEN+"Authenticator: ", auth, Fore.WHITE)
         if not is_auth_valid(auth):
             print("ERROR")
             # handle error
-        s_cipher = AES.new(s_key, AES.MODE_CBC, self.iv)  # reset cipher
+        s_cipher = AES.new(s_key, AES.MODE_CCM, self.nonce)  # reset cipher
 
         # send IDs and keys
         id1, id2 = os.urandom(2), os.urandom(2)
         print(id1+b' , '+id2)
         key1, key2 = b'1'*16, b'2'*16
         print(key1+b' , '+key2)
-        msg = s_cipher.encrypt(pad(id1+b','+id2+b'|'+key1+b','+key2, 16))
+        data = id1+b','+id2+b'|'+key1+b','+key2
+        # s_cipher.update(data)
+        msg = s_cipher.encrypt(pad(data, 16))+b'|'+s_cipher.digest()
         self.csocket.send(msg)
 
         print("Client at ", clientAddress, " disconnected...")
