@@ -76,14 +76,18 @@ class SensorThread(threading.Thread):
         self.sensor_address = sensor_address
 
     def run(self):
-        print("Connection from : ", self.sensor_address)
-        token = self.wur.recv_token()
-        print(Fore.GREEN+"From sensor :", token, Fore.WHITE)
-        if not self.wur.verify_token(token):
-            print('Error')
-            exit(0)
-        print("Token correct!")
-        self.mr.send_ack()
+        for _ in range(10):
+            print("Connection from : ", self.sensor_address)
+            token = self.wur.recv_token()
+            print(Fore.GREEN+"From sensor :", token, Fore.WHITE)
+            if not self.wur.verify_token(token):
+                print('Error - token not correct')
+                exit(0)
+            print("Token correct!")
+            self.mr.send_ack()
+            last_msg = self.mr.recv_notification()
+            self.wur.update_token(last_msg)
+            self.mr.reset_cipher()
 
 
 LOCALHOST = "127.0.0.1"
@@ -102,6 +106,7 @@ class Device():
         while True:
             self.socket.listen(1)
             sensor_sock, sensor_address = self.socket.accept()
+
             newthread = SensorThread(self.WakeUp_Radio(sensor_sock), self.Main_Radio(
                 sensor_sock), sensor_address, sensor_sock)
             newthread.start()
@@ -117,8 +122,6 @@ class Device():
             self.hash_fun.update(self.key+b'(127.0.0.1, 8081)')
             self.token = self.hash_fun.digest()[:2]
 
-        # def wait_wakeup_call(self, mr):
-
         def send_wakeup_call(self):
             self.socket.send(self.token)
 
@@ -132,6 +135,10 @@ class Device():
             else:
                 return False
 
+        def update_token(self, last_message):
+            self.hash_fun.update(self.token+last_message)
+            self.token = self.hash_fun.digest()[:2]
+
     class Main_Radio():
         def __init__(self, socket) -> None:
             self.socket = socket
@@ -139,9 +146,20 @@ class Device():
             self.nonce = b'a'*11
             self.cipher = AES.new(self.key, AES.MODE_CCM, self.nonce)
 
+        def reset_cipher(self):
+            self.cipher = AES.new(self.key, AES.MODE_CCM, self.nonce)
+
         def send_ack(self):
             enc, tag = self.cipher.encrypt_and_digest(b"ACK")
             self.socket.send(enc+b'|'+tag)
+
+        def recv_notification(self):
+            data = self.socket.recv(38)
+            self.reset_cipher()
+            msg = self.cipher.decrypt_and_verify(
+                data.split(b'|')[0], data.split(b'|')[1])
+            print(Fore.GREEN+"From sensor :", msg, Fore.WHITE)
+            return msg
 
 
 node = Device()
