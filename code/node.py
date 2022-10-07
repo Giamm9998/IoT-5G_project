@@ -65,6 +65,33 @@ def kerberos_protocol():
     client.close()
 
 
+def send_values(sock, values):
+    # total length of the packet is given by the length of the values to send + 1 byte each for the values length
+    tot_len = int.to_bytes(len(b''.join(values))+len(values), 1, 'big')
+    sock.send(tot_len)
+    for val in values:
+        l = int.to_bytes(len(val), 1, "big")
+        if __debug__:
+            print(Fore.BLUE+f'sending {l} bytes'+Fore.WHITE)
+        sock.send(l)
+        if __debug__:
+            print(Fore.BLUE+f'sending val: ', val, Fore.WHITE)
+        sock.send(val)
+
+
+def recv_values(sock):
+    # get total packet length
+    tot_len = int.from_bytes(sock.recv(1), 'big')
+    values = []
+    while tot_len > 0:
+        l = int.from_bytes(sock.recv(1), 'big')
+        if __debug__:
+            print(Fore.BLUE+f'value len: {l}'+Fore.WHITE)
+        values.append(sock.recv(l))
+        tot_len -= (l+1)
+    return values
+
+
 class SensorThread(threading.Thread):
     def __init__(self, wur, mr, sensor_address, sensor_socket):
         threading.Thread.__init__(self)
@@ -76,8 +103,8 @@ class SensorThread(threading.Thread):
         self.sensor_address = sensor_address
 
     def run(self):
+        print("Connection from : ", self.sensor_address)
         for _ in range(10):
-            print("Connection from : ", self.sensor_address)
             token = self.wur.recv_token()
             print(Fore.GREEN+"From sensor :", token, Fore.WHITE)
             if not self.wur.verify_token(token):
@@ -88,6 +115,7 @@ class SensorThread(threading.Thread):
             last_msg = self.mr.recv_notification()
             self.wur.update_token(last_msg)
             self.mr.reset_cipher()
+        print('Connection from : ', self.sensor_address, ' closed')
 
 
 LOCALHOST = "127.0.0.1"
@@ -123,10 +151,10 @@ class Device():
             self.token = self.hash_fun.digest()[:2]
 
         def send_wakeup_call(self):
-            self.socket.send(self.token)
+            send_values(self.socket, [self.token])
 
         def recv_token(self):
-            token = self.socket.recv(1024)
+            token = recv_values(self.socket)[0]
             return token
 
         def verify_token(self, token):
@@ -151,13 +179,13 @@ class Device():
 
         def send_ack(self):
             enc, tag = self.cipher.encrypt_and_digest(b"ACK")
-            self.socket.send(enc+b'|'+tag)
+            send_values(self.socket, [enc, tag])
 
         def recv_notification(self):
-            data = self.socket.recv(38)
+            data = recv_values(self.socket)
             self.reset_cipher()
             msg = self.cipher.decrypt_and_verify(
-                data.split(b'|')[0], data.split(b'|')[1])
+                data[0], data[1])
             print(Fore.GREEN+"From sensor :", msg, Fore.WHITE)
             return msg
 

@@ -12,6 +12,33 @@ SERVER = "127.0.0.1"
 PORT = 8081
 
 
+def send_values(sock, values):
+    # total length of the packet is given by the length of the values to send + 1 byte each for the values length
+    tot_len = int.to_bytes(len(b''.join(values))+len(values), 1, 'big')
+    sock.send(tot_len)
+    for val in values:
+        l = int.to_bytes(len(val), 1, "big")
+        if __debug__:
+            print(Fore.BLUE+f'sending {l} bytes'+Fore.WHITE)
+        sock.send(l)
+        if __debug__:
+            print(Fore.BLUE+f'sending val: ', val, Fore.WHITE)
+        sock.send(val)
+
+
+def recv_values(sock):
+    # get total packet length
+    tot_len = int.from_bytes(sock.recv(1), 'big')
+    values = []
+    while tot_len > 0:
+        l = int.from_bytes(sock.recv(1), 'big')
+        if __debug__:
+            print(Fore.BLUE+f'value len: {l}'+Fore.WHITE)
+        values.append(sock.recv(l))
+        tot_len -= (l+1)
+    return values
+
+
 class Device():
     def __init__(self) -> None:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -48,7 +75,7 @@ class Device():
 
         def wakeup_ch(self):
             print('Token: ', self.token)
-            self.socket.send(self.token)
+            send_values(self.socket, [self.token])
 
         def update_token(self, last_message):
             self.hash_fun.update(self.token+last_message)
@@ -70,9 +97,9 @@ class Device():
             self.cipher = AES.new(self.key, AES.MODE_CCM, self.nonce)
 
         def recv_ack(self):
-            data = self.socket.recv(1024)
+            data = recv_values(self.socket)
             ack = self.cipher.decrypt_and_verify(
-                data.split(b'|')[0], data.split(b'|')[1])
+                data[0], data[1])
             print(Fore.GREEN+"From cluster head :", ack, Fore.WHITE)
 
         def send_notification(self):
@@ -81,7 +108,7 @@ class Device():
             last_msg = b'Temperature too high!'
             enc, tag = self.cipher.encrypt_and_digest(last_msg)
             print('sending alarm...')
-            self.socket.send(enc+b'|'+tag)
+            send_values(self.socket, [enc, tag])
             return last_msg
 
         def reset_socket(self, new_sock):
