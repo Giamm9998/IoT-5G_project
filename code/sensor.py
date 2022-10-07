@@ -15,6 +15,9 @@ PORT = 8081
 def send_values(sock, values):
     # total length of the packet is given by the length of the values to send + 1 byte each for the values length
     tot_len = int.to_bytes(len(b''.join(values))+len(values), 1, 'big')
+    if __debug__:
+        print(Fore.BLUE+'sending packet of length: ',
+              int.from_bytes(tot_len, 'big'), Fore.WHITE)
     sock.send(tot_len)
     for val in values:
         l = int.to_bytes(len(val), 1, "big")
@@ -34,7 +37,10 @@ def recv_values(sock):
         l = int.from_bytes(sock.recv(1), 'big')
         if __debug__:
             print(Fore.BLUE+f'value len: {l}'+Fore.WHITE)
-        values.append(sock.recv(l))
+        val = sock.recv(l)
+        if __debug__:
+            print(Fore.BLUE+'value : ', val, Fore.WHITE)
+        values.append(val)
         tot_len -= (l+1)
     return values
 
