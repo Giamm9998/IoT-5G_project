@@ -1,48 +1,33 @@
-from cgitb import reset
 import socket
 import hashlib
+from turtle import update
 from colorama import Fore
 
 from Crypto.Cipher import AES
 from Crypto.Util.number import long_to_bytes, bytes_to_long
 from Crypto.Util.Padding import pad, unpad
-from torch import ne
+
+from random import randint
 
 SERVER = "127.0.0.1"
 PORT = 8081
 
 
-def send_values(sock, values):
-    # total length of the packet is given by the length of the values to send + 1 byte each for the values length
-    tot_len = int.to_bytes(len(b''.join(values))+len(values), 1, 'big')
+def send_value(sock, value):
     if __debug__:
-        print(Fore.BLUE+'sending packet of length: ',
-              int.from_bytes(tot_len, 'big'), Fore.WHITE)
-    sock.send(tot_len)
-    for val in values:
-        l = int.to_bytes(len(val), 1, "big")
-        if __debug__:
-            print(Fore.BLUE+f'sending {l} bytes'+Fore.WHITE)
-        sock.send(l)
-        if __debug__:
-            print(Fore.BLUE+f'sending val: ', val, Fore.WHITE)
-        sock.send(val)
+        print(Fore.BLUE+f'sending {len(value)} bytes'+Fore.WHITE)
+    if __debug__:
+        print(Fore.BLUE+f'sending val: ', value, Fore.WHITE)
+    sock.send(value)
 
 
-def recv_values(sock):
-    # get total packet length
-    tot_len = int.from_bytes(sock.recv(1), 'big')
-    values = []
-    while tot_len > 0:
-        l = int.from_bytes(sock.recv(1), 'big')
-        if __debug__:
-            print(Fore.BLUE+f'value len: {l}'+Fore.WHITE)
-        val = sock.recv(l)
-        if __debug__:
-            print(Fore.BLUE+'value : ', val, Fore.WHITE)
-        values.append(val)
-        tot_len -= (l+1)
-    return values
+def recv_value(sock, size):
+    data = sock.recv(size)
+    if __debug__:
+        print(Fore.BLUE+f'value len: {size}'+Fore.WHITE)
+    if __debug__:
+        print(Fore.BLUE+f'value: ', data, Fore.WHITE)
+    return data
 
 
 class Device():
@@ -62,8 +47,9 @@ class Device():
         except:
             pass
         self.wur.wakeup_ch()
-        self.mr.recv_ack()
-        last_msg = self.mr.send_notification()
+        self.mr.recv_ack_of_wuc(self.wur.token)
+        last_msg, seq_num = self.mr.send_notification()
+        self.mr.recv_ack_of_msg(seq_num)
         self.wur.update_token(last_msg)
         self.mr.reset_cipher()
         # self.reset_radio_socket()
@@ -81,7 +67,7 @@ class Device():
 
         def wakeup_ch(self):
             print('Token: ', self.token)
-            send_values(self.socket, [self.token])
+            send_value(self.socket, self.token)
 
         def update_token(self, last_message):
             self.hash_fun.update(self.token+last_message)
@@ -102,20 +88,35 @@ class Device():
         def reset_cipher(self):
             self.cipher = AES.new(self.key, AES.MODE_CCM, self.nonce)
 
-        def recv_ack(self):
-            data = recv_values(self.socket)
-            ack = self.cipher.decrypt_and_verify(
-                data[0], data[1])
-            print(Fore.GREEN+"From cluster head :", ack, Fore.WHITE)
+        def recv_ack_of_wuc(self, token):
+            ack = recv_value(self.socket, 2)
+            hasher = hashlib.sha256()
+            hasher.update(token+b'X')
+            expected_ack = hasher.digest()[:2]
+            if ack != expected_ack:
+                print('ACK ERROR - ACK received: ', ack,
+                      ' ACK expected: ', expected_ack)
+                exit(0)
+            print(Fore.GREEN+"ACK1 :", ack, Fore.WHITE)
 
         def send_notification(self):
-            # TODO is padding necessary?
             self.reset_cipher()
-            last_msg = b'Temperature too high!'
+            temp = int.to_bytes(randint(0, 40), 1, 'big')
+            seq_num = int.to_bytes(randint(0, 2**16-1), 2, 'big')
+            last_msg = pad(temp+seq_num, 16)
             enc, tag = self.cipher.encrypt_and_digest(last_msg)
             print('sending alarm...')
-            send_values(self.socket, [enc, tag])
-            return last_msg
+            send_value(self.socket, enc+tag)
+            return temp, seq_num
+
+        def recv_ack_of_msg(self, seq_num):
+            ack = int.from_bytes(recv_value(self.socket, 2), 'big')
+            expected_ack = int.from_bytes(seq_num, 'big')+1
+            if ack != expected_ack:
+                print('ACK Error - received ack: ', ack,
+                      ' | ', 'expected ack: ', expected_ack)
+                exit(0)
+            print(Fore.GREEN+"ACK2 :", ack, Fore.WHITE+'\n')
 
         def reset_socket(self, new_sock):
             self.socket.close()

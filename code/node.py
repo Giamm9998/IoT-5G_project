@@ -65,37 +65,21 @@ def kerberos_protocol():
     client.close()
 
 
-def send_values(sock, values):
-    # total length of the packet is given by the length of the values to send + 1 byte each for the values length
-    tot_len = int.to_bytes(len(b''.join(values))+len(values), 1, 'big')
+def send_value(sock, value):
     if __debug__:
-        print(Fore.BLUE+'sending packet of length: ',
-              int.from_bytes(tot_len, 'big'), Fore.WHITE)
-    sock.send(tot_len)
-    for val in values:
-        l = int.to_bytes(len(val), 1, "big")
-        if __debug__:
-            print(Fore.BLUE+f'sending {l} bytes'+Fore.WHITE)
-        sock.send(l)
-        if __debug__:
-            print(Fore.BLUE+f'sending val: ', val, Fore.WHITE)
-        sock.send(val)
+        print(Fore.BLUE+f'sending {len(value)} bytes'+Fore.WHITE)
+    if __debug__:
+        print(Fore.BLUE+f'sending val: ', value, Fore.WHITE)
+    sock.send(value)
 
 
-def recv_values(sock):
-    # get total packet length
-    tot_len = int.from_bytes(sock.recv(1), 'big')
-    values = []
-    while tot_len > 0:
-        l = int.from_bytes(sock.recv(1), 'big')
-        if __debug__:
-            print(Fore.BLUE+f'value len: {l}'+Fore.WHITE)
-        val = sock.recv(l)
-        if __debug__:
-            print(Fore.BLUE+'value : ', val, Fore.WHITE)
-        values.append(val)
-        tot_len -= (l+1)
-    return values
+def recv_value(sock, size):
+    data = sock.recv(size)
+    if __debug__:
+        print(Fore.BLUE+f'value len: {size}'+Fore.WHITE)
+    if __debug__:
+        print(Fore.BLUE+f'value: ', data, Fore.WHITE)
+    return data
 
 
 class SensorThread(threading.Thread):
@@ -112,13 +96,11 @@ class SensorThread(threading.Thread):
         print("Connection from : ", self.sensor_address)
         for _ in range(10):
             token = self.wur.recv_token()
-            print(Fore.GREEN+"From sensor :", token, Fore.WHITE)
-            if not self.wur.verify_token(token):
-                print('Error - token not correct')
-                exit(0)
-            print("Token correct!")
-            self.mr.send_ack()
-            last_msg = self.mr.recv_notification()
+            print(Fore.GREEN+"Token from sensor :", token, Fore.WHITE)
+            self.wur.verify_token(token)
+            self.mr.send_ack_of_wuc(token)
+            last_msg, seq_num = self.mr.recv_notification()
+            self.mr.send_ack_of_msg(seq_num)
             self.wur.update_token(last_msg)
             self.mr.reset_cipher()
         print('Connection from : ', self.sensor_address, ' closed')
@@ -157,20 +139,21 @@ class Device():
             self.token = self.hash_fun.digest()[:2]
 
         def send_wakeup_call(self):
-            send_values(self.socket, [self.token])
+            send_value(self.socket, self.token)
 
         def recv_token(self):
-            token = recv_values(self.socket)[0]
+            token = recv_value(self.socket, 2)
             return token
 
         def verify_token(self, token):
-            if self.token == token:
-                return True
-            else:
-                return False
+            if self.token != token:
+                print('Error token not correct - received token: ',
+                      token, ' expected token: ', self.token)
+                exit(0)
 
         def update_token(self, last_message):
-            self.hash_fun.update(self.token+last_message)
+            self.hash_fun.update(
+                self.token+int.to_bytes(last_message, 1, 'big'))
             self.token = self.hash_fun.digest()[:2]
 
     class Main_Radio():
@@ -183,17 +166,38 @@ class Device():
         def reset_cipher(self):
             self.cipher = AES.new(self.key, AES.MODE_CCM, self.nonce)
 
-        def send_ack(self):
-            enc, tag = self.cipher.encrypt_and_digest(b"ACK")
-            send_values(self.socket, [enc, tag])
+        def send_ack_of_wuc(self, token):
+            hasher = hashlib.sha256()
+            # the ACK is the h(token||sequence) where sequence is a fixed sequence
+            # of bits pre-shared by the parties. Here we choose to use the byte 'X'
+            hasher.update(token+b'X')
+            ack = hasher.digest()[:2]
+            print('ACK1: ', ack)
+            send_value(self.socket, ack)
 
         def recv_notification(self):
-            data = recv_values(self.socket)
+            data = recv_value(self.socket, 32)
             self.reset_cipher()
             msg = self.cipher.decrypt_and_verify(
-                data[0], data[1])
-            print(Fore.GREEN+"From sensor :", msg, Fore.WHITE)
-            return msg
+                data[:16], data[16:])
+            msg = unpad(msg, 16)
+            # first byte received is the temperature
+
+            temp = msg[0]
+            # -------------------
+            # temperature checks
+            # -------------------
+
+            # second byte received is the sequence number
+            seq_num = msg[1:3]
+            print(Fore.GREEN+"From sensor : temp = ", temp,
+                  ' | seq_num = ', seq_num, Fore.WHITE)
+            return temp, seq_num
+
+        def send_ack_of_msg(self, seq_num):
+            ack = int.from_bytes(seq_num, 'big')+1
+            print('ACK2: ', ack, '\n')
+            send_value(self.socket, int.to_bytes(ack, 2, 'big'))
 
 
 node = Device()
