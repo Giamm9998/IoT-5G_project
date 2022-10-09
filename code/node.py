@@ -8,61 +8,12 @@ from Crypto.Util.Padding import pad, unpad
 import threading
 import hashlib
 
-
-def kerberos_protocol():
-    # socket settings
-    SERVER = "127.0.0.1"
-    PORT = 8080
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client.connect((SERVER, PORT))
-
-    # crypto settings
-    key = b'0123456789abcdef'
-    nonce = b'a'*11
-    cipher = AES.new(key, AES.MODE_CCM, nonce)
-
-    # sending node ID
-    node_id = os.urandom(2)
-    client.sendall(node_id)
-
-    # receiving session key
-    data = client.recv(1024).split(b'|')
-    s_key = cipher.decrypt(data[0])
-    # cipher.update(s_key)
-    # MAC verification
-    try:
-        cipher.verify(data[1])
-    except ValueError:
-        print('MAC ERROR')
-        exit(0)
-    print(Fore.GREEN+"From Server :", s_key, Fore.WHITE)
-    s_cipher = AES.new(s_key, AES.MODE_CCM, nonce)
-
-    # sending authenticator
-    timestamp = int(time.time())
-    print(f'timestamp: {timestamp}')
-    # cipher.update(long_to_bytes(timestamp))
-    auth = s_cipher.encrypt(
-        pad(long_to_bytes(timestamp), 16))+b'|'+s_cipher.digest()
-    client.send(auth)
-    s_cipher = AES.new(s_key, AES.MODE_CCM, nonce)  # reset cipher
-
-    # receiving IDs and keys
-    data = client.recv(1024).split(b'|')
-    data_decrypted = unpad(s_cipher.decrypt(data[0]), 16)
-    # cipher.update(data_decrypted)
-    ids = data_decrypted.split(b'|')[0].split(b',')
-    keys = data_decrypted.split(b'|')[1].split(b',')
-    try:
-        s_cipher.verify(data[1])
-    except ValueError:
-        print('MAC ERROR')
-        exit(0)
-    print(Fore.GREEN+"From Server :")
-    print('IDs: ', ids)
-    print('Keys: ', keys, Fore.WHITE)
-
-    client.close()
+BLOCK_LEN = 16
+ID_LEN = 2
+KEY_LEN = 16
+LOCALHOST = "127.0.0.1"
+OWN_PORT = 8081
+BTS_PORT = 8080
 
 
 def send_value(sock, value):
@@ -83,38 +34,28 @@ def recv_value(sock, size):
 
 
 class SensorThread(threading.Thread):
-    def __init__(self, wur, mr, sensor_address, sensor_socket):
+    def __init__(self, dev, sensor_address, sensor_socket):
         threading.Thread.__init__(self)
         self.socket = sensor_socket
         print("New connection added: ", sensor_address)
-        self.wur = wur
-        self.mr = mr
+        self.dev = dev
         # crypto settings
         self.sensor_address = sensor_address
 
     def run(self):
         print("Connection from : ", self.sensor_address)
         for _ in range(10):
-            token = self.wur.recv_token()
-            print(Fore.GREEN+"Token from sensor :", token, Fore.WHITE)
-            self.wur.verify_token(token)
-            self.mr.send_ack_of_wuc(token)
-            last_msg, seq_num = self.mr.recv_notification()
-            self.mr.send_ack_of_msg(seq_num)
-            self.wur.update_token(last_msg)
-            self.mr.reset_cipher()
+            self.dev.wu_protocol()
         print('Connection from : ', self.sensor_address, ' closed')
-
-
-LOCALHOST = "127.0.0.1"
-PORT = 8081
+        self.dev.kerberos_protocol()
+        print('Communication to BTS closed')
 
 
 class Device():
     def __init__(self) -> None:
         node = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         node.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        node.bind((LOCALHOST, PORT))
+        node.bind((LOCALHOST, OWN_PORT))
         print("Cluster head started\nWaiting for a wake up call..")
         self.socket = node
 
@@ -122,11 +63,67 @@ class Device():
         while True:
             self.socket.listen(1)
             sensor_sock, sensor_address = self.socket.accept()
-
-            newthread = SensorThread(self.WakeUp_Radio(sensor_sock), self.Main_Radio(
-                sensor_sock), sensor_address, sensor_sock)
+            self.wur = self.WakeUp_Radio(sensor_sock)
+            self.mr = self.Main_Radio(sensor_sock)
+            newthread = SensorThread(self, sensor_address, sensor_sock)
             newthread.start()
         # self.wur.wait_wakeup_call(self.mr)
+
+    def wu_protocol(self):
+        token = self.wur.recv_token()
+        print(Fore.GREEN+"Token from sensor :", token, Fore.WHITE)
+        self.wur.verify_token(token)
+        self.mr.send_ack_of_wuc(token)
+        last_msg, seq_num = self.mr.recv_notification()
+        self.mr.send_ack_of_msg(seq_num)
+        self.wur.update_token(last_msg)
+        self.mr.reset_cipher()
+
+    def kerberos_protocol(self):
+        # socket settings
+        ssocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ssocket.connect((LOCALHOST, BTS_PORT))
+
+        # crypto settings
+        key = b'0123456789abcdef'
+        nonce = b'a'*11
+        cipher = AES.new(key, AES.MODE_CCM, nonce)
+
+        # sending node ID (16 bits)
+        node_id = os.urandom(ID_LEN)
+        print('sending ID ...')
+        send_value(ssocket, node_id)
+
+        # receiving session key
+        data = recv_value(ssocket, BLOCK_LEN*2)
+        s_key = cipher.decrypt_and_verify(data[:BLOCK_LEN], data[BLOCK_LEN:])
+        print(Fore.RED+"From BTS :", s_key, Fore.WHITE)
+        s_cipher = AES.new(s_key, AES.MODE_CCM, nonce)
+
+        # sending authenticator
+        timestamp = int(time.time())
+        print(f'timestamp: {timestamp}')
+        auth, mac = s_cipher.encrypt_and_digest(
+            pad(long_to_bytes(timestamp), 16))
+        print('sending authenticator...')
+        send_value(ssocket, auth+mac)
+        s_cipher = AES.new(s_key, AES.MODE_CCM, nonce)  # reset cipher
+
+        # receiving IDs and keys
+        data = recv_value(ssocket, BLOCK_LEN*4)
+        ids_and_keys = s_cipher.decrypt_and_verify(
+            data[:-BLOCK_LEN], data[-BLOCK_LEN:])
+        ids_and_keys = unpad(ids_and_keys, 16)
+
+        ids = [ids_and_keys[:ID_LEN], ids_and_keys[ID_LEN:ID_LEN*2]]
+        keys = [ids_and_keys[ID_LEN*2:ID_LEN*2+KEY_LEN],
+                ids_and_keys[ID_LEN*2+KEY_LEN:ID_LEN*2+KEY_LEN*2]]
+
+        print(Fore.RED+"From Server :")
+        print('IDs: ', ids)
+        print('Keys: ', keys, Fore.WHITE)
+
+        ssocket.close()
 
     class WakeUp_Radio():
         def __init__(self, socket) -> None:

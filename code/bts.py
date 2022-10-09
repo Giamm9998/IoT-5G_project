@@ -8,6 +8,27 @@ from Crypto.Util.Padding import pad, unpad
 import time
 
 TIME_THRESHOLD = 5
+KEY_LEN = 16
+ID_LEN = 2  # address has 2 bytes
+ENC_PLUS_TAG_LEN = 32
+BLOCK_LEN = 16
+
+
+def send_value(sock, value):
+    if __debug__:
+        print(Fore.BLUE+f'sending {len(value)} bytes'+Fore.WHITE)
+    if __debug__:
+        print(Fore.BLUE+f'sending val: ', value, Fore.WHITE)
+    sock.send(value)
+
+
+def recv_value(sock, size):
+    data = sock.recv(size)
+    if __debug__:
+        print(Fore.BLUE+f'value len: {size}'+Fore.WHITE)
+    if __debug__:
+        print(Fore.BLUE+f'value: ', data, Fore.WHITE)
+    return data
 
 
 def is_auth_valid(timestamp):
@@ -21,43 +42,46 @@ def is_auth_valid(timestamp):
         return True
 
 
+def reset_cipher(key, nonce):
+    return AES.new(key, AES.MODE_CCM, nonce)
+
+
 def kerberos_protocol(server):
+
     # receive client ID
-    data = server.csocket.recv(2048)
-    print(Fore.GREEN+"Client ID: ", data, Fore.WHITE)
+    data = recv_value(server.csocket, ID_LEN)
+    print(Fore.RED+"Client ID: ", data, Fore.WHITE)
+
     # send session key
-    s_key = os.urandom(16)
+    s_key = os.urandom(KEY_LEN)
     s_cipher = AES.new(s_key, AES.MODE_CCM, server.nonce)
     print('Session key: ', s_key)
-    msg = server.cipher.encrypt(s_key)+b'|'+server.cipher.digest()
-    server.csocket.send(msg)
+    msg, mac = server.cipher.encrypt_and_digest(s_key)
+    print('sending session key...')
+    send_value(server.csocket, msg+mac)
 
     # receive authenticator
-    data = server.csocket.recv(2048).split(b'|')
-    auth = bytes_to_long(unpad(s_cipher.decrypt(data[0]), 16))
+    data = recv_value(server.csocket, ENC_PLUS_TAG_LEN)
+    auth = s_cipher.decrypt_and_verify(data[:BLOCK_LEN], data[BLOCK_LEN:])
+    auth = bytes_to_long(unpad(auth, 16))
 
-    # MAC verification
-    try:
-        s_cipher.verify(data[1])
-    except ValueError:
-        print('MAC ERROR')
-        exit(0)
-    print(Fore.GREEN+"Authenticator: ", auth, Fore.WHITE)
+    print(Fore.RED+"Authenticator: ", auth, Fore.WHITE)
     if not is_auth_valid(auth):
         print("ERROR")
         # handle error
-    s_cipher = AES.new(s_key, AES.MODE_CCM, server.nonce)  # reset cipher
+    s_cipher = reset_cipher(s_key, server.nonce)  # reset cipher
 
     # send IDs and keys
-    id1, id2 = os.urandom(2), os.urandom(2)
+    id1, id2 = os.urandom(ID_LEN), os.urandom(ID_LEN)
     print(id1+b' , '+id2)
-    key1, key2 = b'1'*16, b'2'*16
+    key1, key2 = b'1'*KEY_LEN, b'2'*KEY_LEN
     print(key1+b' , '+key2)
-    data = id1+b','+id2+b'|'+key1+b','+key2
+    data = id1+id2+key1+key2
 
     # s_cipher.update(data)
-    msg = s_cipher.encrypt(pad(data, 16))+b'|'+s_cipher.digest()
-    server.csocket.send(msg)
+    msg, mac = s_cipher.encrypt_and_digest(pad(data, BLOCK_LEN))
+    print('sending ids and keys')
+    send_value(server.csocket, msg+mac)
     print("Client at ", clientAddress, " disconnected...")
 
 
@@ -85,7 +109,7 @@ bts.bind((LOCALHOST, PORT))
 
 
 print("BTS started")
-print("Waiting for Node request..")
+print("Waiting for Cluster Head request..")
 while True:
     bts.listen(1)
     clientsock, clientAddress = bts.accept()
