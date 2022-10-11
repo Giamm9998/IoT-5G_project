@@ -1,3 +1,4 @@
+import hashlib
 from colorama import Fore
 import socket
 import threading
@@ -12,6 +13,8 @@ KEY_LEN = 16
 ID_LEN = 2  # address has 2 bytes
 ENC_PLUS_TAG_LEN = 32
 BLOCK_LEN = 16
+LOCALHOST = "127.0.0.1"
+N_PORT = 8082
 
 
 def send_value(sock, value):
@@ -78,11 +81,24 @@ def kerberos_protocol(server):
     print(key1+b' , '+key2)
     data = id1+id2+key1+key2
 
-    # s_cipher.update(data)
     msg, mac = s_cipher.encrypt_and_digest(pad(data, BLOCK_LEN))
     print('sending ids and keys')
     send_value(server.csocket, msg+mac)
     print("Client at ", clientAddress, " disconnected...")
+
+    # wait 5 seconds before wake up
+    time.sleep(3)
+
+    # wake up neighbor
+    nsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    nsocket.connect((LOCALHOST, N_PORT))
+
+    # token of the neghbor TODO implement a table for all neighbors? TODO Implement token update?
+    n_token_key = b'a'*16
+    hasher = hashlib.sha256()
+    hasher.update(n_token_key+str(N_PORT).encode())
+    n_token = hasher.digest()[:2]
+    send_value(nsocket, n_token)
 
 
 class ClientThread(threading.Thread):

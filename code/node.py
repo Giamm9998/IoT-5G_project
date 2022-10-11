@@ -7,12 +7,15 @@ import time
 from Crypto.Util.Padding import pad, unpad
 import threading
 import hashlib
+import argparse
+
 
 BLOCK_LEN = 16
 ID_LEN = 2
 KEY_LEN = 16
 LOCALHOST = "127.0.0.1"
-OWN_PORT = 8081
+SENS_NUM = 20
+
 BTS_PORT = 8080
 
 
@@ -33,6 +36,15 @@ def recv_value(sock, size):
     return data
 
 
+def reset_cipher(key, nonce):
+    return AES.new(key, AES.MODE_CCM, nonce)
+
+
+def reset_hash(dev, msg):
+    dev.hash_fun = hashlib.sha256()
+    dev.hash_fun.update(msg)
+
+
 class SensorThread(threading.Thread):
     def __init__(self, dev, sensor_address, sensor_socket):
         threading.Thread.__init__(self)
@@ -44,11 +56,17 @@ class SensorThread(threading.Thread):
 
     def run(self):
         print("Connection from : ", self.sensor_address)
-        for _ in range(10):
-            self.dev.wu_protocol()
-        print('Connection from : ', self.sensor_address, ' closed')
-        self.dev.kerberos_protocol()
-        print('Communication to BTS closed')
+        token, caller_id = self.dev.wait_token()
+        if caller_id != 'base_station':
+            self.dev.wu_protocol(token, caller_id)
+            for _ in range(9):
+                token, caller_id = self.dev.wait_token()
+                self.dev.wu_protocol(token, caller_id)
+            print('Connection from : ', self.sensor_address, ' closed')
+            self.dev.kerberos_protocol()
+            print('Communication to BTS closed')
+        else:
+            self.dev.start_d2d(token)
 
 
 class Device():
@@ -67,16 +85,22 @@ class Device():
             self.mr = self.Main_Radio(sensor_sock)
             newthread = SensorThread(self, sensor_address, sensor_sock)
             newthread.start()
-        # self.wur.wait_wakeup_call(self.mr)
 
-    def wu_protocol(self):
+    def wait_token(self):
         token = self.wur.recv_token()
-        print(Fore.GREEN+"Token from sensor :", token, Fore.WHITE)
-        self.wur.verify_token(token)
+        print(Fore.GREEN+"Token received :", token, Fore.WHITE)
+        caller_id = self.mr.verify_token(token)
+        return token, caller_id
+
+    def wu_protocol(self, token, caller_id):
+        # token = self.wur.recv_token()
+        # print(Fore.GREEN+"Token received :", token, Fore.WHITE)
+        # caller_id = self.mr.verify_token(token)
+        print(Fore.GREEN+"ID of the sender :", caller_id, Fore.WHITE)
         self.mr.send_ack_of_wuc(token)
         last_msg, seq_num = self.mr.recv_notification()
         self.mr.send_ack_of_msg(seq_num)
-        self.wur.update_token(last_msg)
+        token = self.mr.update_token(last_msg, caller_id, token)
         self.mr.reset_cipher()
 
     def kerberos_protocol(self):
@@ -125,58 +149,64 @@ class Device():
 
         ssocket.close()
 
+    def start_d2d(self, token):
+        self.mr.send_ack_of_wuc(token)
+        # self.mr.recv_ticket_and_auth()
+
     class WakeUp_Radio():
         def __init__(self, socket) -> None:
             self.socket = socket
-            self.key = b'Gianmarco Arthur'
-            # using sha256 hash
-            self.hash_fun = hashlib.sha256()
-            # first token is the first 16 bits (2 bytes) of sha256(key||cluster__head_address)
-            self.hash_fun.update(self.key+b'(127.0.0.1, 8081)')
-            self.token = self.hash_fun.digest()[:2]
-
-        def send_wakeup_call(self):
-            send_value(self.socket, self.token)
 
         def recv_token(self):
             token = recv_value(self.socket, 2)
             return token
 
-        def verify_token(self, token):
-            if self.token != token:
-                print('Error token not correct - received token: ',
-                      token, ' expected token: ', self.token)
-                exit(0)
-
-        def update_token(self, last_message):
-            self.hash_fun.update(
-                self.token+int.to_bytes(last_message, 1, 'big'))
-            self.token = self.hash_fun.digest()[:2]
-
     class Main_Radio():
         def __init__(self, socket) -> None:
             self.socket = socket
-            self.key = b'Sixteen byte key'
+
+            # crypto settings
+            # TODO Implement different keys for different nodes?
+            self.enc_key = b'Sixteen byte key'
+            # TODO cange nonce every encryption?
             self.nonce = b'a'*11
-            self.cipher = AES.new(self.key, AES.MODE_CCM, self.nonce)
+            self.cipher = AES.new(self.enc_key, AES.MODE_CCM, self.nonce)
+
+            # hash settings
+            # using sha256 hash
+            self.hash_fun = hashlib.sha256()
+            # first token is the first 16 bits (2 bytes) of sha256(key||cluster__head_address)
+
+            # set dictionary with the keys of the sensors and bts
+            self.token_dict = {}
+            for i in range(SENS_NUM):
+                reset_hash(self, os.urandom(KEY_LEN)+str(OWN_PORT).encode())
+                self.token_dict[self.hash_fun.digest()[:ID_LEN]] = f"sens{i+1}"
+            reset_hash(self, b'a'*KEY_LEN+str(OWN_PORT).encode())
+            self.token_dict[self.hash_fun.digest()[:ID_LEN]] = 'base_station'
+            reset_hash(self, b'Gianmarco Arthur'+str(OWN_PORT).encode())
+            self.token_dict[self.hash_fun.digest()[:ID_LEN]] = 'sens0'
+            if __debug__:
+                print('---------------------')
+                print(self.token_dict)
+                print('---------------------')
 
         def reset_cipher(self):
-            self.cipher = AES.new(self.key, AES.MODE_CCM, self.nonce)
+            self.cipher = AES.new(self.enc_key, AES.MODE_CCM, self.nonce)
 
         def send_ack_of_wuc(self, token):
-            hasher = hashlib.sha256()
             # the ACK is the h(token||sequence) where sequence is a fixed sequence
             # of bits pre-shared by the parties. Here we choose to use the byte 'X'
-            hasher.update(token+b'X')
-            ack = hasher.digest()[:2]
+            reset_hash(self, token+b'X')
+            ack = self.hash_fun.digest()[:ID_LEN]
             print('ACK1: ', ack)
             send_value(self.socket, ack)
 
         def recv_notification(self):
-            data = recv_value(self.socket, 32)
+            data = recv_value(self.socket, BLOCK_LEN*2)
             self.reset_cipher()
             msg = self.cipher.decrypt_and_verify(
-                data[:16], data[16:])
+                data[:BLOCK_LEN], data[BLOCK_LEN:])
             msg = unpad(msg, 16)
             # first byte received is the temperature
 
@@ -196,6 +226,40 @@ class Device():
             print('ACK2: ', ack, '\n')
             send_value(self.socket, int.to_bytes(ack, 2, 'big'))
 
+        def verify_token(self, token):
+            if token in self.token_dict:
+                return self.token_dict[token]
+            else:
+                print('Error token not correct - received token: ',
+                      token, ' List of valid tokens: ', self.token_dict)
+                exit(0)
+
+        def update_token(self, last_message, caller_id, old_token):
+            self.token_dict.pop(old_token)
+            reset_hash(self, old_token +
+                       int.to_bytes(last_message, 1, 'big'))
+            new_token = self.hash_fun.digest()[:ID_LEN]
+            self.token_dict[new_token] = caller_id
+            return new_token
+
+        def recv_ticket_and_auth(self):
+            reset_cipher(self.enc_key, self.nonce)
+            data = recv_value(self.socket, BLOCK_LEN*3)
+            data = self.cipher.decrypt_and_verify(
+                data[:BLOCK_LEN*2], data[BLOCK_LEN*2:])
+            id, d2d_key = unpad(data[:BLOCK_LEN]), data[BLOCK_LEN:]
+            id = int(id.decode())
+            return d2d_key
+
+
+# Create the parser
+parser = argparse.ArgumentParser()
+# Add an argument
+parser.add_argument('--port', type=int, required=True)
+# Parse the argument
+args = parser.parse_args()
+
+OWN_PORT = args.port
 
 node = Device()
 node.start()
