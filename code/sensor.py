@@ -7,26 +7,9 @@ from Crypto.Util.number import long_to_bytes, bytes_to_long
 from Crypto.Util.Padding import pad, unpad
 
 from random import randint
-
+from my_utils import send_value, recv_value
 SERVER = "127.0.0.1"
 PORT = 8081
-
-
-def send_value(sock, value):
-    if __debug__:
-        print(Fore.BLUE+f'sending {len(value)} bytes'+Fore.WHITE)
-    if __debug__:
-        print(Fore.BLUE+f'sending val: ', value, Fore.WHITE)
-    sock.send(value)
-
-
-def recv_value(sock, size):
-    data = sock.recv(size)
-    if __debug__:
-        print(Fore.BLUE+f'value len: {size}'+Fore.WHITE)
-    if __debug__:
-        print(Fore.BLUE+f'value: ', data, Fore.WHITE)
-    return data
 
 
 def reset_hash(dev, msg):

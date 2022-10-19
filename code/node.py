@@ -8,36 +8,15 @@ from Crypto.Util.Padding import pad, unpad
 import threading
 import hashlib
 import argparse
-
+from my_utils import reset_cipher, is_auth_valid, send_value, recv_value
 
 BLOCK_LEN = 16
 ID_LEN = 2
 KEY_LEN = 16
 LOCALHOST = "127.0.0.1"
 SENS_NUM = 20
-
+PORT_LEN = 4
 BTS_PORT = 8080
-
-
-def send_value(sock, value):
-    if __debug__:
-        print(Fore.BLUE+f'sending {len(value)} bytes'+Fore.WHITE)
-    if __debug__:
-        print(Fore.BLUE+f'sending val: ', value, Fore.WHITE)
-    sock.send(value)
-
-
-def recv_value(sock, size):
-    data = sock.recv(size)
-    if __debug__:
-        print(Fore.BLUE+f'value len: {size}'+Fore.WHITE)
-    if __debug__:
-        print(Fore.BLUE+f'value: ', data, Fore.WHITE)
-    return data
-
-
-def reset_cipher(key, nonce):
-    return AES.new(key, AES.MODE_CCM, nonce)
 
 
 def reset_hash(dev, msg):
@@ -109,9 +88,9 @@ class Device():
         ssocket.connect((LOCALHOST, BTS_PORT))
 
         # crypto settings
-        key = b'0123456789abcdef'
+        k_a = BTS_KEY
         nonce = b'a'*11
-        cipher = AES.new(key, AES.MODE_CCM, nonce)
+        cipher = AES.new(k_a, AES.MODE_CCM, nonce)
 
         # sending node ID (16 bits)
         node_id = os.urandom(ID_LEN)
@@ -121,7 +100,7 @@ class Device():
         # receiving session key
         data = recv_value(ssocket, BLOCK_LEN*2)
         s_key = cipher.decrypt_and_verify(data[:BLOCK_LEN], data[BLOCK_LEN:])
-        print(Fore.RED+"From BTS :", s_key, Fore.WHITE)
+        print(Fore.RED+"Session key :", s_key, Fore.WHITE)
         s_cipher = AES.new(s_key, AES.MODE_CCM, nonce)
 
         # sending authenticator
@@ -139,9 +118,9 @@ class Device():
             data[:-BLOCK_LEN], data[-BLOCK_LEN:])
         ids_and_keys = unpad(ids_and_keys, 16)
 
-        ids = [ids_and_keys[:ID_LEN], ids_and_keys[ID_LEN:ID_LEN*2]]
-        keys = [ids_and_keys[ID_LEN*2:ID_LEN*2+KEY_LEN],
-                ids_and_keys[ID_LEN*2+KEY_LEN:ID_LEN*2+KEY_LEN*2]]
+        ids = [ids_and_keys[:PORT_LEN], ids_and_keys[PORT_LEN:PORT_LEN*2]]
+        keys = [ids_and_keys[PORT_LEN*2:PORT_LEN*2+KEY_LEN],
+                ids_and_keys[PORT_LEN*2+KEY_LEN:PORT_LEN*2+KEY_LEN*2]]
 
         print(Fore.RED+"From Server :")
         print('IDs: ', ids)
@@ -151,7 +130,8 @@ class Device():
 
     def start_d2d(self, token):
         self.mr.send_ack_of_wuc(token)
-        # self.mr.recv_ticket_and_auth()
+        d2d_key, auth = self.mr.recv_ticket_and_auth()
+        self.mr.send_ack_of_auth(d2d_key, auth)
 
     class WakeUp_Radio():
         def __init__(self, socket) -> None:
@@ -243,23 +223,43 @@ class Device():
             return new_token
 
         def recv_ticket_and_auth(self):
-            reset_cipher(self.enc_key, self.nonce)
-            data = recv_value(self.socket, BLOCK_LEN*3)
-            data = self.cipher.decrypt_and_verify(
-                data[:BLOCK_LEN*2], data[BLOCK_LEN*2:])
-            id, d2d_key = unpad(data[:BLOCK_LEN]), data[BLOCK_LEN:]
+            cipher = reset_cipher(BTS_KEY, self.nonce)
+            data = recv_value(self.socket, BLOCK_LEN*4)
+            print(len(data))
+            data = cipher.decrypt_and_verify(
+                data[:BLOCK_LEN*3], data[BLOCK_LEN*3:])
+            # receive ID and key
+            id_and_d2d_key = unpad(data[:BLOCK_LEN*2], 16)
+            id, d2d_key = id_and_d2d_key[:PORT_LEN], id_and_d2d_key[PORT_LEN:]
+            print(Fore.BLUE+"ID: ", id, Fore.WHITE)
+            print(Fore.BLUE+"D2D KEY: ", d2d_key, Fore.WHITE)
+            # receive authenticator
+            auth = bytes_to_long(unpad(data[BLOCK_LEN*2:BLOCK_LEN*3], 16))
+            print(Fore.BLUE+"Authenticator: ", auth, Fore.WHITE)
+            if not is_auth_valid(auth):
+                print("ERROR")
+                exit(0)
+
             id = int(id.decode())
-            return d2d_key
+            return d2d_key, auth
+
+        def send_ack_of_auth(self, key, auth):
+            cipher = reset_cipher(key, self.nonce)
+            ack = pad(long_to_bytes(auth+1), 16)
+            ack, tag = cipher.encrypt_and_digest(ack)
+            send_value(self.socket, ack+tag)
 
 
 # Create the parser
 parser = argparse.ArgumentParser()
 # Add an argument
 parser.add_argument('--port', type=int, required=True)
+parser.add_argument('--key', type=str, required=True)
 # Parse the argument
 args = parser.parse_args()
 
 OWN_PORT = args.port
+BTS_KEY = (args.key).encode()
 
 node = Device()
 node.start()
