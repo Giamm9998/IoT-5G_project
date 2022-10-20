@@ -28,7 +28,6 @@ class SensorThread(threading.Thread):
     def __init__(self, dev, sensor_address, sensor_socket):
         threading.Thread.__init__(self)
         self.socket = sensor_socket
-        print("New connection added: ", sensor_address)
         self.dev = dev
         # crypto settings
         self.sensor_address = sensor_address
@@ -43,9 +42,10 @@ class SensorThread(threading.Thread):
                 self.dev.wu_protocol(token, caller_id)
             print('Connection from : ', self.sensor_address, ' closed')
             self.dev.kerberos_protocol()
-            print('Communication to BTS closed')
+            print('Communication to BTS closed, waiting for D2D...')
         else:
             self.dev.start_d2d(token)
+            print('Communication to BTS closed, starting D2D...')
 
 
 class Device():
@@ -60,15 +60,15 @@ class Device():
         while True:
             self.socket.listen(1)
             sensor_sock, sensor_address = self.socket.accept()
-            self.wur = self.WakeUp_Radio(sensor_sock)
             self.mr = self.Main_Radio(sensor_sock)
+            self.wur = self.WakeUp_Radio(sensor_sock, self.mr.token_dict)
             newthread = SensorThread(self, sensor_address, sensor_sock)
             newthread.start()
 
     def wait_token(self):
         token = self.wur.recv_token()
         print(Fore.GREEN+"Token received :", token, Fore.WHITE)
-        caller_id = self.mr.verify_token(token)
+        caller_id = self.wur.verify_token(token)
         return token, caller_id
 
     def wu_protocol(self, token, caller_id):
@@ -79,7 +79,7 @@ class Device():
         self.mr.send_ack_of_wuc(token)
         last_msg, seq_num = self.mr.recv_notification()
         self.mr.send_ack_of_msg(seq_num)
-        token = self.mr.update_token(last_msg, caller_id, token)
+        token = self.mr.update_token(last_msg, caller_id, token, self.wur)
         self.mr.reset_cipher()
 
     def kerberos_protocol(self):
@@ -93,7 +93,7 @@ class Device():
         cipher = AES.new(k_a, AES.MODE_CCM, nonce)
 
         # sending node ID (16 bits)
-        node_id = os.urandom(ID_LEN)
+        node_id = str(OWN_PORT).encode()
         print('sending ID ...')
         send_value(ssocket, node_id)
 
@@ -118,11 +118,11 @@ class Device():
             data[:-BLOCK_LEN], data[-BLOCK_LEN:])
         ids_and_keys = unpad(ids_and_keys, 16)
 
-        ids = [ids_and_keys[:PORT_LEN], ids_and_keys[PORT_LEN:PORT_LEN*2]]
-        keys = [ids_and_keys[PORT_LEN*2:PORT_LEN*2+KEY_LEN],
-                ids_and_keys[PORT_LEN*2+KEY_LEN:PORT_LEN*2+KEY_LEN*2]]
+        # TODO make this dynamic (multiple neighbors)
+        ids = [ids_and_keys[:PORT_LEN]]
+        keys = [ids_and_keys[PORT_LEN:PORT_LEN+KEY_LEN]]
 
-        print(Fore.RED+"From Server :")
+        print(Fore.RED+"Neighbors data :")
         print('IDs: ', ids)
         print('Keys: ', keys, Fore.WHITE)
 
@@ -134,12 +134,22 @@ class Device():
         self.mr.send_ack_of_auth(d2d_key, auth)
 
     class WakeUp_Radio():
-        def __init__(self, socket) -> None:
+        def __init__(self, socket, token_dict) -> None:
             self.socket = socket
+            self.token_dict = token_dict
 
         def recv_token(self):
             token = recv_value(self.socket, 2)
             return token
+
+        def verify_token(self, token):
+            if token in self.token_dict:
+                return self.token_dict[token]
+            else:
+                if not __debug__:
+                    print('Error token not correct - received token: ',
+                          token, ' List of valid tokens: ', self.token_dict)
+                exit(0)
 
     class Main_Radio():
         def __init__(self, socket) -> None:
@@ -179,7 +189,6 @@ class Device():
             # of bits pre-shared by the parties. Here we choose to use the byte 'X'
             reset_hash(self, token+b'X')
             ack = self.hash_fun.digest()[:ID_LEN]
-            print('ACK1: ', ack)
             send_value(self.socket, ack)
 
         def recv_notification(self):
@@ -197,7 +206,7 @@ class Device():
 
             # second byte received is the sequence number
             seq_num = msg[1:3]
-            print(Fore.GREEN+"From sensor : temp = ", temp,
+            print(Fore.GREEN+"Sensor data : temp = ", temp,
                   ' | seq_num = ', seq_num, Fore.WHITE)
             return temp, seq_num
 
@@ -206,26 +215,18 @@ class Device():
             print('ACK2: ', ack, '\n')
             send_value(self.socket, int.to_bytes(ack, 2, 'big'))
 
-        def verify_token(self, token):
-            if token in self.token_dict:
-                return self.token_dict[token]
-            else:
-                print('Error token not correct - received token: ',
-                      token, ' List of valid tokens: ', self.token_dict)
-                exit(0)
-
-        def update_token(self, last_message, caller_id, old_token):
+        def update_token(self, last_message, caller_id, old_token, wur):
             self.token_dict.pop(old_token)
             reset_hash(self, old_token +
                        int.to_bytes(last_message, 1, 'big'))
             new_token = self.hash_fun.digest()[:ID_LEN]
             self.token_dict[new_token] = caller_id
+            wur.token_dict = self.token_dict
             return new_token
 
         def recv_ticket_and_auth(self):
             cipher = reset_cipher(BTS_KEY, self.nonce)
             data = recv_value(self.socket, BLOCK_LEN*4)
-            print(len(data))
             data = cipher.decrypt_and_verify(
                 data[:BLOCK_LEN*3], data[BLOCK_LEN*3:])
             # receive ID and key

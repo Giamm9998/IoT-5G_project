@@ -7,12 +7,16 @@ TIME_THRESHOLD = 5
 
 def is_auth_valid(timestamp):
     current_time = int(time.time())
-    print(f'current time: {current_time}, timestamp: {timestamp}', end='')
+    if not __debug__:
+        print(
+            f'Timestamp check => current time: {current_time}, timestamp: {timestamp}', end='')
     if current_time-timestamp > TIME_THRESHOLD:
-        print(' -> INVALID!')
+        if not __debug__:
+            print(' -> INVALID!')
         return False
     else:
-        print(' -> valid')
+        if not __debug__:
+            print(' -> valid')
         return True
 
 
@@ -21,17 +25,17 @@ def reset_cipher(key, nonce):
 
 
 def send_value(sock, value):
-    if __debug__:
+    if not __debug__:
         print(Fore.BLUE+f'sending {len(value)} bytes'+Fore.WHITE)
-    if __debug__:
+    if not __debug__:
         print(Fore.BLUE+f'sending val: ', value, Fore.WHITE)
     sock.send(value)
 
 
 def recv_value(sock, size):
     data = sock.recv(size)
-    if __debug__:
+    if not __debug__:
         print(Fore.BLUE+f'value len: {size}'+Fore.WHITE)
-    if __debug__:
-        print(Fore.BLUE+f'value: ', data, Fore.WHITE)
+    if not __debug__:
+        print(Fore.BLUE+f'value received: ', data, Fore.WHITE)
     return data
