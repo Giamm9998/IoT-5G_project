@@ -26,16 +26,16 @@ def reset_cipher(key, nonce):
 
 def send_value(sock, value):
     if not __debug__:
-        print(Fore.BLUE+f'sending {len(value)} bytes'+Fore.WHITE)
+        print(Fore.CYAN+f'sending {len(value)} bytes'+Fore.WHITE)
     if not __debug__:
-        print(Fore.BLUE+f'sending val: ', value, Fore.WHITE)
+        print(Fore.CYAN+f'sending val: ', value, Fore.WHITE)
     sock.send(value)
 
 
 def recv_value(sock, size):
     data = sock.recv(size)
     if not __debug__:
-        print(Fore.BLUE+f'value len: {size}'+Fore.WHITE)
+        print(Fore.CYAN+f'value len: {size}'+Fore.WHITE)
     if not __debug__:
-        print(Fore.BLUE+f'value received: ', data, Fore.WHITE)
+        print(Fore.CYAN+f'value received: ', data, Fore.WHITE)
     return data

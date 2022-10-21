@@ -41,6 +41,8 @@ class SensorThread(threading.Thread):
                 token, caller_id = self.dev.wait_token()
                 self.dev.wu_protocol(token, caller_id)
             print('Connection from : ', self.sensor_address, ' closed')
+            # wait input before starting kerberos
+            input()
             self.dev.kerberos_protocol()
             print('Communication to BTS closed, waiting for D2D...')
         else:
@@ -53,7 +55,7 @@ class Device():
         node = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         node.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         node.bind((LOCALHOST, OWN_PORT))
-        print("Cluster head started\nWaiting for a wake up call..")
+        print("\nCluster head started\nWaiting for a wake up call..")
         self.socket = node
 
     def start(self):
@@ -67,15 +69,12 @@ class Device():
 
     def wait_token(self):
         token = self.wur.recv_token()
-        print(Fore.GREEN+"Token received :", token, Fore.WHITE)
+        print(Fore.YELLOW+"Token received :", token, Fore.WHITE)
         caller_id = self.wur.verify_token(token)
         return token, caller_id
 
     def wu_protocol(self, token, caller_id):
-        # token = self.wur.recv_token()
-        # print(Fore.GREEN+"Token received :", token, Fore.WHITE)
-        # caller_id = self.mr.verify_token(token)
-        print(Fore.GREEN+"ID of the sender :", caller_id, Fore.WHITE)
+        print("ID of the sender :", caller_id)
         self.mr.send_ack_of_wuc(token)
         last_msg, seq_num = self.mr.recv_notification()
         self.mr.send_ack_of_msg(seq_num)
@@ -105,7 +104,8 @@ class Device():
 
         # sending authenticator
         timestamp = int(time.time())
-        print(f'timestamp: {timestamp}')
+        if not __debug__:
+            print(f'timestamp: {timestamp}')
         auth, mac = s_cipher.encrypt_and_digest(
             pad(long_to_bytes(timestamp), 16))
         print('sending authenticator...')
@@ -176,7 +176,7 @@ class Device():
             self.token_dict[self.hash_fun.digest()[:ID_LEN]] = 'base_station'
             reset_hash(self, b'Gianmarco Arthur'+str(OWN_PORT).encode())
             self.token_dict[self.hash_fun.digest()[:ID_LEN]] = 'sens0'
-            if __debug__:
+            if not __debug__:
                 print('---------------------')
                 print(self.token_dict)
                 print('---------------------')
@@ -189,6 +189,7 @@ class Device():
             # of bits pre-shared by the parties. Here we choose to use the byte 'X'
             reset_hash(self, token+b'X')
             ack = self.hash_fun.digest()[:ID_LEN]
+            print('sending ack of the token ...')
             send_value(self.socket, ack)
 
         def recv_notification(self):
@@ -207,7 +208,7 @@ class Device():
             # second byte received is the sequence number
             seq_num = msg[1:3]
             print(Fore.GREEN+"Sensor data : temp = ", temp,
-                  ' | seq_num = ', seq_num, Fore.WHITE)
+                  ' | seq_num = ', int.from_bytes(seq_num, 'big'), Fore.WHITE)
             return temp, seq_num
 
         def send_ack_of_msg(self, seq_num):
@@ -248,6 +249,7 @@ class Device():
             cipher = reset_cipher(key, self.nonce)
             ack = pad(long_to_bytes(auth+1), 16)
             ack, tag = cipher.encrypt_and_digest(ack)
+            print('sending ack of the authenticator ...')
             send_value(self.socket, ack+tag)
 
 

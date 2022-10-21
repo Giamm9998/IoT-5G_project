@@ -20,6 +20,7 @@ N_PORT = 8082
 PORT_LEN = 4
 # the base station has a dictionary containing for each cluster head: the id (port),
 # the pre-shared key and a list of neighbors
+# TODO add tokens for update
 NODE_DICT = {b'8081': [b'0123456789abcdef', [b'8082']],
              b'8082': [b'fedcba9876543210', [b'8081']]}
 
@@ -39,7 +40,8 @@ def kerberos_protocol(server):
     # send session key
     s_key = os.urandom(KEY_LEN)
     s_cipher = AES.new(s_key, AES.MODE_CCM, nonce)
-    print('Session key: ', s_key)
+    if not __debug__:
+        print('Session key: ', s_key)
     msg, mac = cipher.encrypt_and_digest(s_key)
     print('sending session key...')
     send_value(server.csocket, msg+mac)
@@ -70,8 +72,8 @@ def kerberos_protocol(server):
     send_value(server.csocket, msg+mac)
     print("Client at ", clientAddress, " disconnected...")
 
-    # wait 5 seconds before wake up
-    time.sleep(1)
+    # wait input before wake up
+    input()
 
     # wake up neighbor
     nsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -126,7 +128,6 @@ class ClientThread(threading.Thread):
         self.csocket = clientsocket
         # crypto settings
         self.node_dict = {}
-        print(clientAddress)
 
     def run(self):
         print("Connection from : ", clientAddress)
@@ -142,8 +143,7 @@ bts.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 bts.bind((LOCALHOST, PORT))
 
 
-print("BTS started")
-print("Waiting for Cluster Head request..")
+print("\nBTS started\nWaiting for Cluster Head request..")
 while True:
     bts.listen(1)
     clientsock, clientAddress = bts.accept()
