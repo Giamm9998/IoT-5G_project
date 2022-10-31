@@ -7,7 +7,9 @@ from Crypto.Util.number import long_to_bytes, bytes_to_long
 from Crypto.Util.Padding import pad, unpad
 
 from random import randint
-from my_utils import send_value, recv_value
+from my_utils import reset_cipher, send_value, recv_value
+import os
+
 SERVER = "127.0.0.1"
 PORT = 8081
 
@@ -39,7 +41,7 @@ class Device():
         self.mr.recv_ack_of_msg(seq_num)
         token = self.mr.update_token(last_msg)
         self.wur.token = token
-        self.mr.reset_cipher()
+        self.mr.nonce = self.mr.reset_cipher()
         # self.reset_radio_socket()
 
     class WakeUp_Radio():
@@ -62,7 +64,7 @@ class Device():
             # Crypto settings
             self.enc_key = b'Sixteen byte key'
             self.nonce = b'a'*11
-            self.cipher = AES.new(self.enc_key, AES.MODE_CCM, self.nonce)
+            self.cipher = None
 
             # hash settings
             self.token_key = b'Gianmarco Arthur'
@@ -73,9 +75,10 @@ class Device():
             # taking the first 16 bits
             self.token = self.hash_fun.digest()[:2]
 
-        # TODO modify b'|' with something correct
         def reset_cipher(self):
-            self.cipher = AES.new(self.enc_key, AES.MODE_CCM, self.nonce)
+            nonce = os.urandom(11)
+            self.cipher = AES.new(self.enc_key, AES.MODE_CCM, nonce)
+            return nonce
 
         def recv_ack_of_wuc(self, token):
             ack = recv_value(self.socket, 2)
@@ -88,13 +91,13 @@ class Device():
             print(Fore.GREEN+"ACK1 :", ack, Fore.WHITE)
 
         def send_notification(self):
-            self.reset_cipher()
+            self.cipher, nonce = reset_cipher(self.enc_key)
             temp = int.to_bytes(randint(0, 40), 1, 'big')
             seq_num = int.to_bytes(randint(0, 2**16-1), 2, 'big')
             last_msg = pad(temp+seq_num, 16)
             enc, tag = self.cipher.encrypt_and_digest(last_msg)
             print('sending alarm...')
-            send_value(self.socket, enc+tag)
+            send_value(self.socket, enc+tag+nonce)
             return temp, seq_num
 
         def recv_ack_of_msg(self, seq_num):

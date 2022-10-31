@@ -1,7 +1,10 @@
 import time
 from Crypto.Cipher import AES
 from colorama import Fore
+import os
 
+
+NONCE_LEN = 11
 TIME_THRESHOLD = 5
 
 
@@ -20,8 +23,16 @@ def is_auth_valid(timestamp):
         return True
 
 
-def reset_cipher(key, nonce):
-    return AES.new(key, AES.MODE_CCM, nonce)
+def reset_cipher(key, nonce=None):
+    # We are encrypting, we need a new nonce
+    if nonce == None:
+        new_nonce = os.urandom(NONCE_LEN)
+        cipher = AES.new(key, AES.MODE_CCM, new_nonce)
+        return cipher, new_nonce
+    # We are decrypting, we need to use the received nonce
+    else:
+        cipher = AES.new(key, AES.MODE_CCM, nonce)
+        return cipher
 
 
 def send_value(sock, value):

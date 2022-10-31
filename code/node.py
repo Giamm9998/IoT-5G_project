@@ -14,9 +14,12 @@ BLOCK_LEN = 16
 ID_LEN = 2
 KEY_LEN = 16
 LOCALHOST = "127.0.0.1"
+
+# TODO modify this for performance evaluation
 SENS_NUM = 20
 PORT_LEN = 4
 BTS_PORT = 8080
+NONCE_LEN = 11
 
 
 def reset_hash(dev, msg):
@@ -79,7 +82,7 @@ class Device():
         last_msg, seq_num = self.mr.recv_notification()
         self.mr.send_ack_of_msg(seq_num)
         token = self.mr.update_token(last_msg, caller_id, token, self.wur)
-        self.mr.reset_cipher()
+        # self.mr.reset_cipher()
 
     def kerberos_protocol(self):
         # socket settings
@@ -88,8 +91,8 @@ class Device():
 
         # crypto settings
         k_a = BTS_KEY
-        nonce = b'a'*11
-        cipher = AES.new(k_a, AES.MODE_CCM, nonce)
+        # nonce = os.urandom(16)
+        # cipher = AES.new(k_a, AES.MODE_CCM, nonce)
 
         # sending node ID (16 bits)
         node_id = str(OWN_PORT).encode()
@@ -97,30 +100,34 @@ class Device():
         send_value(ssocket, node_id)
 
         # receiving session key
-        data = recv_value(ssocket, BLOCK_LEN*2)
+        data = recv_value(ssocket, BLOCK_LEN*2+NONCE_LEN)
+        data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
+        cipher = reset_cipher(k_a, nonce)
         s_key = cipher.decrypt_and_verify(data[:BLOCK_LEN], data[BLOCK_LEN:])
         print(Fore.RED+"Session key :", s_key, Fore.WHITE)
-        s_cipher = AES.new(s_key, AES.MODE_CCM, nonce)
 
         # sending authenticator
+        s_cipher, nonce = reset_cipher(s_key)
         timestamp = int(time.time())
         if not __debug__:
             print(f'timestamp: {timestamp}')
         auth, mac = s_cipher.encrypt_and_digest(
             pad(long_to_bytes(timestamp), 16))
         print('sending authenticator...')
-        send_value(ssocket, auth+mac)
-        s_cipher = AES.new(s_key, AES.MODE_CCM, nonce)  # reset cipher
+        send_value(ssocket, auth+mac+nonce)
 
         # receiving IDs and keys
-        data = recv_value(ssocket, BLOCK_LEN*4)
+        data = recv_value(ssocket, BLOCK_LEN*14+NONCE_LEN)
+        data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
+        s_cipher = reset_cipher(s_key, nonce)  # reset cipher
         ids_and_keys = s_cipher.decrypt_and_verify(
             data[:-BLOCK_LEN], data[-BLOCK_LEN:])
-        ids_and_keys = unpad(ids_and_keys, 16)
+        ids_and_keys = unpad(ids_and_keys, BLOCK_LEN)
 
-        # TODO make this dynamic (multiple neighbors)
-        ids = [ids_and_keys[:PORT_LEN]]
-        keys = [ids_and_keys[PORT_LEN:PORT_LEN+KEY_LEN]]
+        # each neighbors correspond to 16 bytes of key + 4 of ID = 20 bytes
+        neighbors_number = len(ids_and_keys)//(BLOCK_LEN+PORT_LEN)
+        ids = [ids_and_keys[:PORT_LEN*neighbors_number]]
+        keys = [ids_and_keys[PORT_LEN*neighbors_number:]]
 
         print(Fore.RED+"Neighbors data :")
         print('IDs: ', ids)
@@ -158,7 +165,6 @@ class Device():
             # crypto settings
             # TODO Implement different keys for different nodes?
             self.enc_key = b'Sixteen byte key'
-            # TODO cange nonce every encryption?
             self.nonce = b'a'*11
             self.cipher = AES.new(self.enc_key, AES.MODE_CCM, self.nonce)
 
@@ -181,9 +187,6 @@ class Device():
                 print(self.token_dict)
                 print('---------------------')
 
-        def reset_cipher(self):
-            self.cipher = AES.new(self.enc_key, AES.MODE_CCM, self.nonce)
-
         def send_ack_of_wuc(self, token):
             # the ACK is the h(token||sequence) where sequence is a fixed sequence
             # of bits pre-shared by the parties. Here we choose to use the byte 'X'
@@ -193,18 +196,17 @@ class Device():
             send_value(self.socket, ack)
 
         def recv_notification(self):
-            data = recv_value(self.socket, BLOCK_LEN*2)
-            self.reset_cipher()
+            data = recv_value(self.socket, BLOCK_LEN*2+NONCE_LEN)
+            data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
+            self.cipher = reset_cipher(self.enc_key, nonce)
             msg = self.cipher.decrypt_and_verify(
                 data[:BLOCK_LEN], data[BLOCK_LEN:])
             msg = unpad(msg, 16)
             # first byte received is the temperature
-
             temp = msg[0]
-            # -------------------
-            # temperature checks
-            # -------------------
-
+            # ----------------------------------------------------
+            #                 temperature checks
+            # ----------------------------------------------------
             # second byte received is the sequence number
             seq_num = msg[1:3]
             print(Fore.GREEN+"Sensor data : temp = ", temp,
@@ -226,8 +228,9 @@ class Device():
             return new_token
 
         def recv_ticket_and_auth(self):
-            cipher = reset_cipher(BTS_KEY, self.nonce)
-            data = recv_value(self.socket, BLOCK_LEN*4)
+            data = recv_value(self.socket, BLOCK_LEN*4+NONCE_LEN)
+            data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
+            cipher = reset_cipher(BTS_KEY, nonce)
             data = cipher.decrypt_and_verify(
                 data[:BLOCK_LEN*3], data[BLOCK_LEN*3:])
             # receive ID and key
@@ -246,11 +249,11 @@ class Device():
             return d2d_key, auth
 
         def send_ack_of_auth(self, key, auth):
-            cipher = reset_cipher(key, self.nonce)
+            cipher, nonce = reset_cipher(key)
             ack = pad(long_to_bytes(auth+1), 16)
             ack, tag = cipher.encrypt_and_digest(ack)
             print('sending ack of the authenticator ...')
-            send_value(self.socket, ack+tag)
+            send_value(self.socket, ack+tag+nonce)
 
 
 # Create the parser
