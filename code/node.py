@@ -8,7 +8,7 @@ from Crypto.Util.Padding import pad, unpad
 import threading
 import hashlib
 import argparse
-from my_utils import reset_cipher, is_auth_valid, send_value, recv_value
+from my_utils import *
 
 BLOCK_LEN = 16
 ID_LEN = 2
@@ -91,10 +91,7 @@ class Device():
 
         # ----------------------- time check -----------------------
         if not __debug__:
-            elapsed_time = (time.time()-t)
-            self.mr.computation_time += elapsed_time
-            print(Fore.MAGENTA, 'TIME CHECK ',
-                  elapsed_time, Fore.WHITE)
+            self.mr.computation_time += time_check(t)
         # ----------------------------------------------------------
 
         return token, caller_id
@@ -213,9 +210,7 @@ class Device():
 
             # ----------------------- time check -----------------------
             if not __debug__:
-                elapsed_time = (time.time()-t)
-                self.computation_time += elapsed_time
-                print(Fore.MAGENTA, 'TIME CHECK: ', elapsed_time, Fore.WHITE)
+                self.computation_time += time_check(t)
             # ----------------------------------------------------------
 
             if not __debug__:
@@ -237,9 +232,7 @@ class Device():
 
             # ----------------------- time check -----------------------
             if not __debug__:
-                elapsed_time = (time.time()-t)
-                self.computation_time += elapsed_time
-                print(Fore.MAGENTA, 'TIME CHECK: ', elapsed_time, Fore.WHITE)
+                self.computation_time += time_check(t)
             # ----------------------------------------------------------
 
             print('sending ack of the token ...')
@@ -268,9 +261,7 @@ class Device():
 
             # ----------------------- time check -----------------------
             if not __debug__:
-                elapsed_time = (time.time()-t)
-                self.computation_time += elapsed_time
-                print(Fore.MAGENTA, 'TIME CHECK: ', elapsed_time, Fore.WHITE)
+                self.computation_time += time_check(t)
             # ----------------------------------------------------------
 
             print(Fore.GREEN+"Sensor data : temp = ", temp,
@@ -298,9 +289,7 @@ class Device():
 
             # ----------------------- time check -----------------------
             if not __debug__:
-                elapsed_time = (time.time()-t)
-                self.computation_time += elapsed_time
-                print(Fore.MAGENTA, 'TIME CHECK: ', elapsed_time, Fore.WHITE)
+                self.computation_time += time_check(t)
             # ----------------------------------------------------------
 
             return new_token

@@ -50,3 +50,9 @@ def recv_value(sock, size):
     if not __debug__:
         print(Fore.CYAN+f'value received: ', data, Fore.WHITE)
     return data
+
+
+def time_check(t):
+    elapsed_time = (time.time()-t)
+    print(Fore.MAGENTA, 'TIME CHECK ', elapsed_time, Fore.WHITE)
+    return elapsed_time

@@ -7,7 +7,7 @@ from Crypto.Util.number import long_to_bytes, bytes_to_long
 from Crypto.Util.Padding import pad, unpad
 
 from random import randint
-from my_utils import reset_cipher, send_value, recv_value
+from my_utils import reset_cipher, send_value, recv_value, time_check
 import os
 
 SERVER = "127.0.0.1"
@@ -99,10 +99,7 @@ class Device():
 
             # ----------------------- time check -----------------------
             if not __debug__:
-                elapsed_time = (time.time()-t)
-                self.computation_time += elapsed_time
-                print(Fore.MAGENTA, 'TIME CHECK ',
-                      elapsed_time, Fore.WHITE)
+                self.computation_time += time_check(t)
             # ----------------------------------------------------------
 
         def reset_cipher(self):
@@ -127,10 +124,7 @@ class Device():
 
             # ----------------------- time check -----------------------
             if not __debug__:
-                elapsed_time = (time.time()-t)
-                self.computation_time += elapsed_time
-                print(Fore.MAGENTA, 'TIME CHECK ',
-                      elapsed_time, Fore.WHITE)
+                self.computation_time += time_check(t)
             # ----------------------------------------------------------
 
             print(Fore.GREEN+"ACK1 :", ack, Fore.WHITE)
@@ -150,10 +144,7 @@ class Device():
 
             # ----------------------- time check -----------------------
             if not __debug__:
-                elapsed_time = (time.time()-t)
-                self.computation_time += elapsed_time
-                print(Fore.MAGENTA, 'TIME CHECK ',
-                      elapsed_time, Fore.WHITE)
+                self.computation_time += time_check(t)
             # ----------------------------------------------------------
 
             print('sending alarm...')
@@ -176,10 +167,7 @@ class Device():
 
             # ----------------------- time check -----------------------
             if not __debug__:
-                elapsed_time = (time.time()-t)
-                self.computation_time += elapsed_time
-                print(Fore.MAGENTA, 'TIME CHECK ',
-                      elapsed_time, Fore.WHITE)
+                self.computation_time += time_check(t)
             # ----------------------------------------------------------
 
             print(Fore.GREEN+"ACK2 :", ack, Fore.WHITE+'\n')
