@@ -40,9 +40,17 @@ class SensorThread(threading.Thread):
         token, caller_id = self.dev.wait_token()
         if caller_id != 'base_station':
             self.dev.wu_protocol(token, caller_id)
+            if not __debug__:
+                print(Fore.MAGENTA+"COMPUTATION TIME: ",
+                      self.dev.mr.computation_time, Fore.WHITE)
+                self.dev.mr.computation_time = 0
             for _ in range(9):
                 token, caller_id = self.dev.wait_token()
                 self.dev.wu_protocol(token, caller_id)
+                if not __debug__:
+                    print(Fore.MAGENTA+"COMPUTATION TIME: ",
+                          self.dev.mr.computation_time, Fore.WHITE)
+                    self.dev.mr.computation_time = 0
             print('Connection from : ', self.sensor_address, ' closed')
             # wait input before starting kerberos
             input()
@@ -73,7 +81,22 @@ class Device():
     def wait_token(self):
         token = self.wur.recv_token()
         print(Fore.YELLOW+"Token received :", token, Fore.WHITE)
+
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            t = time.time()
+        # ----------------------------------------------------------
+
         caller_id = self.wur.verify_token(token)
+
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            elapsed_time = (time.time()-t)
+            self.mr.computation_time += elapsed_time
+            print(Fore.MAGENTA, 'TIME CHECK ',
+                  elapsed_time, Fore.WHITE)
+        # ----------------------------------------------------------
+
         return token, caller_id
 
     def wu_protocol(self, token, caller_id):
@@ -82,7 +105,6 @@ class Device():
         last_msg, seq_num = self.mr.recv_notification()
         self.mr.send_ack_of_msg(seq_num)
         token = self.mr.update_token(last_msg, caller_id, token, self.wur)
-        # self.mr.reset_cipher()
 
     def kerberos_protocol(self):
         # socket settings
@@ -161,11 +183,17 @@ class Device():
     class Main_Radio():
         def __init__(self, socket) -> None:
             self.socket = socket
-
+            if not __debug__:
+                self.computation_time = 0
             # crypto settings
-            # TODO Implement different keys for different nodes?
             self.enc_key = b'Sixteen byte key'
             self.nonce = b'a'*11
+
+            # ----------------------- time check -----------------------
+            if not __debug__:
+                t = time.time()
+            # ----------------------------------------------------------
+
             self.cipher = AES.new(self.enc_key, AES.MODE_CCM, self.nonce)
 
             # hash settings
@@ -182,21 +210,49 @@ class Device():
             self.token_dict[self.hash_fun.digest()[:ID_LEN]] = 'base_station'
             reset_hash(self, b'Gianmarco Arthur'+str(OWN_PORT).encode())
             self.token_dict[self.hash_fun.digest()[:ID_LEN]] = 'sens0'
+
+            # ----------------------- time check -----------------------
+            if not __debug__:
+                elapsed_time = (time.time()-t)
+                self.computation_time += elapsed_time
+                print(Fore.MAGENTA, 'TIME CHECK: ', elapsed_time, Fore.WHITE)
+            # ----------------------------------------------------------
+
             if not __debug__:
                 print('---------------------')
                 print(self.token_dict)
                 print('---------------------')
 
         def send_ack_of_wuc(self, token):
+
+            # ----------------------- time check -----------------------
+            if not __debug__:
+                t = time.time()
+            # ----------------------------------------------------------
+
             # the ACK is the h(token||sequence) where sequence is a fixed sequence
             # of bits pre-shared by the parties. Here we choose to use the byte 'X'
             reset_hash(self, token+b'X')
             ack = self.hash_fun.digest()[:ID_LEN]
+
+            # ----------------------- time check -----------------------
+            if not __debug__:
+                elapsed_time = (time.time()-t)
+                self.computation_time += elapsed_time
+                print(Fore.MAGENTA, 'TIME CHECK: ', elapsed_time, Fore.WHITE)
+            # ----------------------------------------------------------
+
             print('sending ack of the token ...')
             send_value(self.socket, ack)
 
         def recv_notification(self):
             data = recv_value(self.socket, BLOCK_LEN*2+NONCE_LEN)
+
+            # ----------------------- time check -----------------------
+            if not __debug__:
+                t = time.time()
+            # ----------------------------------------------------------
+
             data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
             self.cipher = reset_cipher(self.enc_key, nonce)
             msg = self.cipher.decrypt_and_verify(
@@ -209,6 +265,14 @@ class Device():
             # ----------------------------------------------------
             # second byte received is the sequence number
             seq_num = msg[1:3]
+
+            # ----------------------- time check -----------------------
+            if not __debug__:
+                elapsed_time = (time.time()-t)
+                self.computation_time += elapsed_time
+                print(Fore.MAGENTA, 'TIME CHECK: ', elapsed_time, Fore.WHITE)
+            # ----------------------------------------------------------
+
             print(Fore.GREEN+"Sensor data : temp = ", temp,
                   ' | seq_num = ', int.from_bytes(seq_num, 'big'), Fore.WHITE)
             return temp, seq_num
@@ -219,12 +283,26 @@ class Device():
             send_value(self.socket, int.to_bytes(ack, 2, 'big'))
 
         def update_token(self, last_message, caller_id, old_token, wur):
+
+            # ----------------------- time check -----------------------
+            if not __debug__:
+                t = time.time()
+            # ----------------------------------------------------------
+
             self.token_dict.pop(old_token)
             reset_hash(self, old_token +
                        int.to_bytes(last_message, 1, 'big'))
             new_token = self.hash_fun.digest()[:ID_LEN]
             self.token_dict[new_token] = caller_id
             wur.token_dict = self.token_dict
+
+            # ----------------------- time check -----------------------
+            if not __debug__:
+                elapsed_time = (time.time()-t)
+                self.computation_time += elapsed_time
+                print(Fore.MAGENTA, 'TIME CHECK: ', elapsed_time, Fore.WHITE)
+            # ----------------------------------------------------------
+
             return new_token
 
         def recv_ticket_and_auth(self):
