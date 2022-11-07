@@ -137,6 +137,7 @@ def kerberos_protocol(server):
         exit(0)
 
     print('Connection with ', LOCALHOST, ':', N_PORT, ' closed')
+    nsocket.close()
 
 
 class ClientThread(threading.Thread):
