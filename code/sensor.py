@@ -119,16 +119,20 @@ class Device():
             print(Fore.GREEN+"ACK1 :", ack, Fore.WHITE)
 
         def send_notification(self):
-            temp = int.to_bytes(randint(0, 40), 1, 'big')
+            # first encryption takes longer time for some reason,
+            # so first iteration is not considered in the time checks
+            self.cipher, nonce = reset_cipher(self.enc_key)
+            enc, tag = self.cipher.encrypt_and_digest(b'a')
+
             # ----------------------- time check -----------------------
             if not __debug__:
                 t = time.time()
             # ----------------------------------------------------------
+            temp = int.to_bytes(randint(0, 40), 1, 'big')
             self.cipher, nonce = reset_cipher(self.enc_key)
             seq_num = int.to_bytes(randint(0, 2**16-1), 2, 'big')
             last_msg = pad(temp+seq_num, 16)
-            # first encryption takes longer time for some reason,
-            # so first iteration is not considered in the time checks
+
             enc, tag = self.cipher.encrypt_and_digest(last_msg)
             # ----------------------- time check -----------------------
             if not __debug__:
@@ -170,4 +174,5 @@ for i in range(CALLS):
     sensor.notify_ch()
 
 if not __debug__:
-    print(times)
+    print(Fore.MAGENTA+"Times: ",
+          times, Fore.WHITE)

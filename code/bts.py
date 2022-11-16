@@ -7,7 +7,7 @@ from Crypto.Util.number import long_to_bytes, bytes_to_long
 import os
 from Crypto.Util.Padding import pad, unpad
 import time
-from my_utils import send_value, recv_value, is_auth_valid, reset_cipher
+from my_utils import send_value, recv_value, is_auth_valid, reset_cipher, N_NEIGHBORS
 
 NONCE_LEN = 11
 TIME_THRESHOLD = 5
@@ -23,18 +23,13 @@ SECRET_SEQ = b'X'  # pre-established secret sequence for ack computation
 # the base station has a dictionary containing for each cluster head: the id (port),
 # the pre-shared key and a list of neighbors
 # TODO add tokens for update
-# TODO consider the case of many neighbors for the perfomance evaluation
-NODE_DICT = {b'8081': [b'0123456789abcdef', [b'8082', b'8083', b'8084', b'8085', b'8086', b'8087', b'8088', b'8089', b'8090', b'8091']],
-             b'8082': [b'fedcba9876543210', [b'8081']],
-             b'8083': [os.urandom(16), [b'8081']],
-             b'8084': [os.urandom(16), [b'8081']],
-             b'8085': [os.urandom(16), [b'8081']],
-             b'8086': [os.urandom(16), [b'8081']],
-             b'8087': [os.urandom(16), [b'8081']],
-             b'8088': [os.urandom(16), [b'8081']],
-             b'8089': [os.urandom(16), [b'8081']],
-             b'8090': [os.urandom(16), [b'8081']],
-             b'8091': [os.urandom(16), [b'8081']]}
+
+NODE_DICT = {b'8081': [b'0123456789abcdef', [b'8082']],
+             b'8082': [b'fedcba9876543210', [b'8081']]}
+for i in range(N_NEIGHBORS):
+    node_id = str(8083+i).encode()
+    NODE_DICT[node_id] = [os.urandom(KEY_LEN), [b'8081']]
+    NODE_DICT[b'8081'][1].append(node_id)
 
 
 def kerberos_protocol(server):
@@ -76,7 +71,7 @@ def kerberos_protocol(server):
         print(neighbors)
     keys = []
     keys.append(b'1'*KEY_LEN)
-    for i in range(9):
+    for i in range(N_NEIGHBORS):
         keys.append(os.urandom(KEY_LEN))
     if not __debug__:
         print(keys)

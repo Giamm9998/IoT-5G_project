@@ -6,7 +6,8 @@ import os
 
 NONCE_LEN = 11
 TIME_THRESHOLD = 5
-CALLS = 2
+CALLS = 100
+N_NEIGHBORS = 31
 
 
 def is_auth_valid(timestamp):

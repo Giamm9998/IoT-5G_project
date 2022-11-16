@@ -9,13 +9,18 @@ import threading
 import hashlib
 import argparse
 from my_utils import *
+# from cryptography.hazmat.primitives import hashes
+# from cryptography.hazmat.primitives.asymmetric import ec
+# from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+# from cryptography.hazmat.primitives import serialization
+from Crypto.Protocol.KDF import HKDF
+from Crypto.Hash import SHA256
 
 BLOCK_LEN = 16
 ID_LEN = 2
 KEY_LEN = 16
 LOCALHOST = "127.0.0.1"
 
-# TODO modify this for performance evaluation
 SENS_NUM = 20
 PORT_LEN = 4
 BTS_PORT = 8080
@@ -63,7 +68,8 @@ class SensorThread(threading.Thread):
             input()
             id, d2d_key = self.dev.kerberos_protocol()
             print('Communication to BTS closed, waiting for D2D...')
-            self.dev.d2d(id, d2d_key)
+            sock = self.dev.d2d(id, d2d_key)
+            d2d_key = self.dev.unassisted_d2d(sock, d2d_key)
         else:
             print('Communication to BTS closed, starting D2D...')
             self.dev.start_d2d(token)
@@ -141,7 +147,9 @@ class Device():
         send_value(ssocket, auth+mac+nonce)
 
         # receiving IDs and keys
-        data = recv_value(ssocket, BLOCK_LEN*14+NONCE_LEN)
+        # 20 bytes for each node (4 id + 16 key) +16 bytes MAC + 16 bytes padding + 11 bytes nonce
+        data = recv_value(ssocket, (N_NEIGHBORS+1) *
+                          (KEY_LEN+PORT_LEN)+BLOCK_LEN*2+NONCE_LEN)
         data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
         s_cipher = reset_cipher(s_key, nonce)  # reset cipher
         ids_and_keys = s_cipher.decrypt_and_verify(
@@ -172,12 +180,29 @@ class Device():
         ch_sock = self.mr.connect_to_ch(id)
         self.mr.send_d2d_data(ch_sock, d2d_key)
         self.mr.recv_d2d_data(ch_sock, d2d_key)
+        new_key, token_id = self.mr.send_resumption_data(d2d_key, ch_sock)
+
+        self.mr.resume_conn(ch_sock, token_id)
+        self.mr.send_d2d_data(ch_sock, new_key)
+        self.mr.recv_d2d_data(ch_sock, new_key)
+
+        print("Closing connection with ch")
+        ch_sock.close()
+        return new_key
 
     def d2d(self, id, d2d_key):
-        print(d2d_key)
         ch_sock = self.mr.wait_d2d(self.socket)
         self.mr.recv_d2d_data(ch_sock, d2d_key)
         self.mr.send_d2d_data(ch_sock, d2d_key)
+        self.mr.recv_resumption_data(ch_sock)
+        return ch_sock
+
+    def unassisted_d2d(self, ch_sock, old_key):
+        d2d_key = self.mr.gen_new_key(ch_sock, old_key)
+        self.mr.recv_d2d_data(ch_sock, d2d_key)
+        self.mr.send_d2d_data(ch_sock, d2d_key)
+        print("Closing connection with ch")
+        return d2d_key
 
     class WakeUp_Radio():
         def __init__(self, socket, token_dict) -> None:
@@ -205,6 +230,12 @@ class Device():
             # crypto settings
             self.enc_key = b'Sixteen byte key'
             self.nonce = b'a'*11
+
+            # first encryption takes longer time for some reason,
+            # so the following line is useless, but for evaluation purposes
+            if not __debug__:
+                self.cipher = AES.new(self.enc_key, AES.MODE_CCM, self.nonce)
+
             # ----------------------- time check -----------------------
             if not __debug__:
                 t = time.time()
@@ -234,6 +265,9 @@ class Device():
                 print(self.token_dict)
                 print('---------------------')
 
+            # Table used to resume connection without bts assistance
+            self.resumption_table = {}
+
         def send_ack_of_wuc(self, token):
             # ----------------------- time check -----------------------
             if not __debug__:
@@ -252,6 +286,15 @@ class Device():
 
         def recv_notification(self):
             data = recv_value(self.socket, BLOCK_LEN*2+NONCE_LEN)
+
+            # first encryption takes longer time for some reason,
+            # so the following line is useless, but for evaluation purposes
+            if not __debug__:
+                tmp1, tmp2 = data[:-NONCE_LEN], data[-NONCE_LEN:]
+                self.cipher = reset_cipher(self.enc_key, tmp2)
+                msg = self.cipher.decrypt_and_verify(
+                    tmp1[:BLOCK_LEN], tmp1[BLOCK_LEN:])
+
             # ----------------------- time check -----------------------
             if not __debug__:
                 t = time.time()
@@ -355,9 +398,65 @@ class Device():
                 data[:BLOCK_LEN], data[BLOCK_LEN:])
             print(Fore.BLUE+"D2D data: ", unpad(data, BLOCK_LEN), Fore.WHITE)
 
-        def derive_new_key(self, d2d_key):
-            pass
+        # def send_dh_half_key(self, sock, d2d_key, public_key):
+        #     # size 256 bits
+        #     cipher, nonce = reset_cipher(d2d_key)
+        #     dh_hkey, tag = cipher.encrypt_and_digest(public_key)
+        #     print(len(dh_hkey))
+        #     send_value(sock, dh_hkey+tag+nonce)
 
+        # def recv_dh_half_key(self, sock, d2d_key, private_key):
+        #     size = 32
+        #     # 256 bits of key
+        #     data = recv_value(sock, 120+BLOCK_LEN+NONCE_LEN)
+        #     data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
+        #     cipher = reset_cipher(d2d_key, nonce)
+        #     sender_public_key = cipher.decrypt_and_verify(
+        #         data[:-BLOCK_LEN], data[-BLOCK_LEN:])
+
+        #     sender_public_key = serialization.load_der_public_key(
+        #         sender_public_key,
+        #     )
+        #     shared_key = private_key.exchange(
+        #         ec.ECDH(), sender_public_key)
+
+        #     derived_key = HKDF(algorithm=hashes.SHA256(), length=size,
+        #                        salt=None, info=b'',).derive(shared_key)
+        #     return derived_key
+
+        def send_resumption_data(self, d2d_key, socket):
+            nonce = os.urandom(16)
+            token_id = os.urandom(1)
+            send_value(socket, nonce+token_id)
+            new_key = HKDF(d2d_key, 32, nonce, SHA256)
+            print(Fore.BLUE+"New key: ", new_key, Fore.WHITE)
+            return new_key, token_id
+
+        def recv_resumption_data(self, socket):
+            data = recv_value(socket, 17)
+            nonce, token_id = data[:16], data[-1]
+            self.resumption_table[token_id] = nonce
+            print(Fore.BLUE+"Resumption data: nonce= ",
+                  nonce, ", id= ", token_id, Fore.WHITE)
+
+        def resume_conn(self, socket, token_id):
+            send_value(socket, token_id)
+            print("Resuming connection...")
+
+        def gen_new_key(self, socket, d2d_key):
+            token_id = int.from_bytes(recv_value(socket, 1), 'big')
+            print("Connection resumed...")
+
+            if token_id in self.resumption_table:
+                new_key = HKDF(
+                    d2d_key, 32, self.resumption_table[token_id], SHA256)
+                print(Fore.BLUE+"New key: ", new_key, Fore.WHITE)
+
+                return new_key
+            else:
+                print("Resumption table: ", self.resumption_table)
+                print("Error, resumption not possible")
+                exit(1)
 
             # Create the parser
 parser = argparse.ArgumentParser()
