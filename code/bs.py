@@ -7,7 +7,7 @@ from Crypto.Util.number import long_to_bytes, bytes_to_long
 import os
 from Crypto.Util.Padding import pad, unpad
 import time
-from my_utils import send_value, recv_value, is_auth_valid, reset_cipher, N_NEIGHBORS
+from my_utils import send_value, recv_value, is_auth_valid, reset_cipher, N_NEIGHBORS, time_check
 
 NONCE_LEN = 11
 TIME_THRESHOLD = 5
@@ -66,6 +66,10 @@ def kerberos_protocol(server):
         # handle error
 
     # send IDs and keys
+    # ----------------------- time check -----------------------
+    if not __debug__:
+        t = time.time()
+    # ----------------------------------------------------------
     s_cipher, nonce = reset_cipher(s_key)  # reset cipher
     if not __debug__:
         print(neighbors)
@@ -79,11 +83,16 @@ def kerberos_protocol(server):
 
     msg, mac = s_cipher.encrypt_and_digest(pad(data, BLOCK_LEN))
     print('sending ids and keys...')
+    # ----------------------- time check -----------------------
+    if not __debug__:
+        print(Fore.MAGENTA+f"COMPUTATION TIME WITH {N_NEIGHBORS+1} NEIGHBORS: ",
+              time_check(t), Fore.WHITE)
+    # ----------------------------------------------------------
     send_value(server.csocket, msg+mac+nonce)
     print("Client at ", clientAddress, " disconnected...")
 
     # wait input before wake up
-    input()
+    # input()
 
     # wake up neighbor
     nsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -144,7 +153,16 @@ class ClientThread(threading.Thread):
 
     def run(self):
         print("Connection from : ", clientAddress)
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            t = time.time()
+        # ----------------------------------------------------------
         kerberos_protocol(self)
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            print(Fore.MAGENTA+"ASSISTED D2D TIME: ",
+                  time_check(t), Fore.WHITE)
+        # ----------------------------------------------------------
         print()
 
 

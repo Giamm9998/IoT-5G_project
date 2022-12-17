@@ -9,10 +9,6 @@ import threading
 import hashlib
 import argparse
 from my_utils import *
-# from cryptography.hazmat.primitives import hashes
-# from cryptography.hazmat.primitives.asymmetric import ec
-# from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-# from cryptography.hazmat.primitives import serialization
 from Crypto.Protocol.KDF import HKDF
 from Crypto.Hash import SHA256
 
@@ -21,7 +17,7 @@ ID_LEN = 2
 KEY_LEN = 16
 LOCALHOST = "127.0.0.1"
 
-SENS_NUM = 20
+SENS_NUM = 100
 PORT_LEN = 4
 BTS_PORT = 8080
 NONCE_LEN = 11
@@ -65,8 +61,18 @@ class SensorThread(threading.Thread):
                 print(Fore.MAGENTA+"Times: ",
                       times, Fore.WHITE)
             # wait input before starting kerberos
-            input()
+            # input()
+            # ----------------------- time check -----------------------
+            if not __debug__:
+                t = time.time()
+            # ----------------------------------------------------------
             id, d2d_key = self.dev.kerberos_protocol()
+            # ----------------------- time check -----------------------
+            if not __debug__:
+                self.dev.mr.assisted_time += time_check(t)
+                print(Fore.MAGENTA+"ASSISTED D2D TIME: ",
+                      self.dev.mr.assisted_time, Fore.WHITE)
+            # ----------------------------------------------------------
             print('Communication to BTS closed, waiting for D2D...')
             sock = self.dev.d2d(id, d2d_key)
             d2d_key = self.dev.unassisted_d2d(sock, d2d_key)
@@ -77,11 +83,10 @@ class SensorThread(threading.Thread):
 
 class Device():
     def __init__(self) -> None:
-        node = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        node.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        node.bind((LOCALHOST, OWN_PORT))
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket .bind((LOCALHOST, OWN_PORT))
         print("\nCluster head started\nWaiting for a wake up call..")
-        self.socket = node
 
     def start(self):
         while True:
@@ -148,6 +153,10 @@ class Device():
 
         # receiving IDs and keys
         # 20 bytes for each node (4 id + 16 key) +16 bytes MAC + 16 bytes padding + 11 bytes nonce
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            t = time.time()
+        # ----------------------------------------------------------
         data = recv_value(ssocket, (N_NEIGHBORS+1) *
                           (KEY_LEN+PORT_LEN)+BLOCK_LEN*2+NONCE_LEN)
         data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
@@ -155,11 +164,15 @@ class Device():
         ids_and_keys = s_cipher.decrypt_and_verify(
             data[:-BLOCK_LEN], data[-BLOCK_LEN:])
         ids_and_keys = unpad(ids_and_keys, BLOCK_LEN)
-
         # each neighbors correspond to 16 bytes of key + 4 of ID = 20 bytes
         neighbors_number = len(ids_and_keys)//(BLOCK_LEN+PORT_LEN)
         ids = ids_and_keys[:PORT_LEN*neighbors_number]
         keys = ids_and_keys[PORT_LEN*neighbors_number:]
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            print(Fore.MAGENTA+f"COMPUTATION TIME WITH {N_NEIGHBORS+1} NEIGHBORS: ",
+                  time_check(t), Fore.WHITE)
+        # ----------------------------------------------------------
 
         print(Fore.RED+"Neighbors data :")
         print('IDs: ', ids)
@@ -173,16 +186,34 @@ class Device():
 
     def start_d2d(self, token):
         # last part of kerberos
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            t = time.time()
+        # ----------------------------------------------------------
         self.mr.send_ack_of_wuc(token)
         d2d_key, auth, id = self.mr.recv_ticket_and_auth()
         self.mr.send_ack_of_auth(d2d_key, auth)
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            self.mr.assisted_time += time_check(t)
+            print(Fore.MAGENTA+"ASSISTED D2D TIME: ",
+                  self.mr.assisted_time, Fore.WHITE)
+        # ----------------------------------------------------------
         # Starting actual d2d
         ch_sock = self.mr.connect_to_ch(id)
         self.mr.send_d2d_data(ch_sock, d2d_key)
         self.mr.recv_d2d_data(ch_sock, d2d_key)
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            t = time.time()
+        # ----------------------------------------------------------
         new_key, token_id = self.mr.send_resumption_data(d2d_key, ch_sock)
-
         self.mr.resume_conn(ch_sock, token_id)
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            print(Fore.MAGENTA+"UNASSISTED D2D TIME: ",
+                  time_check(t), Fore.WHITE)
+        # ----------------------------------------------------------
         self.mr.send_d2d_data(ch_sock, new_key)
         self.mr.recv_d2d_data(ch_sock, new_key)
 
@@ -194,11 +225,31 @@ class Device():
         ch_sock = self.mr.wait_d2d(self.socket)
         self.mr.recv_d2d_data(ch_sock, d2d_key)
         self.mr.send_d2d_data(ch_sock, d2d_key)
-        self.mr.recv_resumption_data(ch_sock)
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            t = time.time()
+        # ----------------------------------------------------------
+        self.mr.recv_resumption_data(d2d_key, ch_sock)
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            self.mr.unassisted_time += time_check(t)
+            print(Fore.MAGENTA+"UNASSISTED D2D TIME: ",
+                  self.mr.unassisted_time, Fore.WHITE)
+        # ----------------------------------------------------------
         return ch_sock
 
     def unassisted_d2d(self, ch_sock, old_key):
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            t = time.time()
+        # ----------------------------------------------------------
         d2d_key = self.mr.gen_new_key(ch_sock, old_key)
+        # ----------------------- time check -----------------------
+        if not __debug__:
+            self.mr.unassisted_time += time_check(t)
+            print(Fore.MAGENTA+"UNASSISTED D2D TIME: ",
+                  self.mr.unassisted_time, Fore.WHITE)
+        # ----------------------------------------------------------
         self.mr.recv_d2d_data(ch_sock, d2d_key)
         self.mr.send_d2d_data(ch_sock, d2d_key)
         print("Closing connection with ch")
@@ -226,6 +277,8 @@ class Device():
         def __init__(self, socket) -> None:
             self.socket = socket
             if not __debug__:
+                self.unassisted_time = 0
+                self.assisted_time = 0
                 self.computation_time = 0
             # crypto settings
             self.enc_key = b'Sixteen byte key'
@@ -398,46 +451,28 @@ class Device():
                 data[:BLOCK_LEN], data[BLOCK_LEN:])
             print(Fore.BLUE+"D2D data: ", unpad(data, BLOCK_LEN), Fore.WHITE)
 
-        # def send_dh_half_key(self, sock, d2d_key, public_key):
-        #     # size 256 bits
-        #     cipher, nonce = reset_cipher(d2d_key)
-        #     dh_hkey, tag = cipher.encrypt_and_digest(public_key)
-        #     print(len(dh_hkey))
-        #     send_value(sock, dh_hkey+tag+nonce)
-
-        # def recv_dh_half_key(self, sock, d2d_key, private_key):
-        #     size = 32
-        #     # 256 bits of key
-        #     data = recv_value(sock, 120+BLOCK_LEN+NONCE_LEN)
-        #     data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
-        #     cipher = reset_cipher(d2d_key, nonce)
-        #     sender_public_key = cipher.decrypt_and_verify(
-        #         data[:-BLOCK_LEN], data[-BLOCK_LEN:])
-
-        #     sender_public_key = serialization.load_der_public_key(
-        #         sender_public_key,
-        #     )
-        #     shared_key = private_key.exchange(
-        #         ec.ECDH(), sender_public_key)
-
-        #     derived_key = HKDF(algorithm=hashes.SHA256(), length=size,
-        #                        salt=None, info=b'',).derive(shared_key)
-        #     return derived_key
-
         def send_resumption_data(self, d2d_key, socket):
-            nonce = os.urandom(16)
+            res_nonce = os.urandom(16)
             token_id = os.urandom(1)
-            send_value(socket, nonce+token_id)
-            new_key = HKDF(d2d_key, 32, nonce, SHA256)
+
+            cipher, nonce = reset_cipher(d2d_key)
+            enc_data, tag = cipher.encrypt_and_digest(res_nonce+token_id)
+            send_value(socket, enc_data+tag+nonce)
+
+            new_key = HKDF(d2d_key, 32, res_nonce, SHA256)
             print(Fore.BLUE+"New key: ", new_key, Fore.WHITE)
             return new_key, token_id
 
-        def recv_resumption_data(self, socket):
-            data = recv_value(socket, 17)
-            nonce, token_id = data[:16], data[-1]
-            self.resumption_table[token_id] = nonce
+        def recv_resumption_data(self, d2d_key, socket):
+            data = recv_value(socket, BLOCK_LEN*2+1+NONCE_LEN)
+            data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
+            cipher = reset_cipher(d2d_key, nonce)
+            data = cipher.decrypt_and_verify(
+                data[:BLOCK_LEN+1], data[BLOCK_LEN+1:BLOCK_LEN*2+1])
+            res_nonce, token_id = data[:16], data[-1]
+            self.resumption_table[token_id] = res_nonce
             print(Fore.BLUE+"Resumption data: nonce= ",
-                  nonce, ", id= ", token_id, Fore.WHITE)
+                  res_nonce, ", id= ", token_id, Fore.WHITE)
 
         def resume_conn(self, socket, token_id):
             send_value(socket, token_id)
@@ -469,5 +504,5 @@ args = parser.parse_args()
 OWN_PORT = args.port
 BTS_KEY = (args.key).encode()
 
-node = Device()
-node.start()
+ch = Device()
+ch.start()
