@@ -62,17 +62,8 @@ class SensorThread(threading.Thread):
                       times, Fore.WHITE)
             # wait input before starting kerberos
             # input()
-            # ----------------------- time check -----------------------
-            if not __debug__:
-                t = time.time()
-            # ----------------------------------------------------------
             id, d2d_key = self.dev.kerberos_protocol()
-            # ----------------------- time check -----------------------
-            if not __debug__:
-                self.dev.mr.assisted_time += time_check(t)
-                print(Fore.MAGENTA+"ASSISTED D2D TIME: ",
-                      self.dev.mr.assisted_time, Fore.WHITE)
-            # ----------------------------------------------------------
+
             print('Communication to BTS closed, waiting for D2D...')
             sock = self.dev.d2d(id, d2d_key)
             d2d_key = self.dev.unassisted_d2d(sock, d2d_key)
@@ -100,16 +91,7 @@ class Device():
     def wait_token(self):
         token = self.wur.recv_token()
         print(Fore.YELLOW+"Token received :", token, Fore.WHITE)
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            t = time.time()
-        # ----------------------------------------------------------
         caller_id = self.wur.verify_token(token)
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            self.mr.computation_time += time_check(t)
-        # ----------------------------------------------------------
-
         return token, caller_id
 
     def wu_protocol(self, token, caller_id):
@@ -153,10 +135,6 @@ class Device():
 
         # receiving IDs and keys
         # 20 bytes for each node (4 id + 16 key) +16 bytes MAC + 16 bytes padding + 11 bytes nonce
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            t = time.time()
-        # ----------------------------------------------------------
         data = recv_value(ssocket, (N_NEIGHBORS+1) *
                           (KEY_LEN+PORT_LEN)+BLOCK_LEN*2+NONCE_LEN)
         data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
@@ -168,11 +146,6 @@ class Device():
         neighbors_number = len(ids_and_keys)//(BLOCK_LEN+PORT_LEN)
         ids = ids_and_keys[:PORT_LEN*neighbors_number]
         keys = ids_and_keys[PORT_LEN*neighbors_number:]
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            print(Fore.MAGENTA+f"COMPUTATION TIME WITH {N_NEIGHBORS+1} NEIGHBORS: ",
-                  time_check(t), Fore.WHITE)
-        # ----------------------------------------------------------
 
         print(Fore.RED+"Neighbors data :")
         print('IDs: ', ids)
@@ -186,37 +159,17 @@ class Device():
 
     def start_d2d(self, token):
         # last part of kerberos
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            t = time.time()
-        # ----------------------------------------------------------
         self.mr.send_ack_of_wuc(token)
         d2d_key, auth, id = self.mr.recv_ticket_and_auth()
         self.mr.send_ack_of_auth(d2d_key, auth)
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            self.mr.assisted_time += time_check(t)
-            print(Fore.MAGENTA+"ASSISTED D2D TIME: ",
-                  self.mr.assisted_time, Fore.WHITE)
-        # ----------------------------------------------------------
         # Starting actual d2d
         ch_sock = self.mr.connect_to_ch(id)
         self.mr.send_d2d_data(ch_sock, d2d_key)
         self.mr.recv_d2d_data(ch_sock, d2d_key)
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            t = time.time()
-        # ----------------------------------------------------------
         new_key, token_id = self.mr.send_resumption_data(d2d_key, ch_sock)
         self.mr.resume_conn(ch_sock, token_id)
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            print(Fore.MAGENTA+"UNASSISTED D2D TIME: ",
-                  time_check(t), Fore.WHITE)
-        # ----------------------------------------------------------
         self.mr.send_d2d_data(ch_sock, new_key)
         self.mr.recv_d2d_data(ch_sock, new_key)
-
         print("Closing connection with ch")
         ch_sock.close()
         return new_key
@@ -225,31 +178,11 @@ class Device():
         ch_sock = self.mr.wait_d2d(self.socket)
         self.mr.recv_d2d_data(ch_sock, d2d_key)
         self.mr.send_d2d_data(ch_sock, d2d_key)
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            t = time.time()
-        # ----------------------------------------------------------
         self.mr.recv_resumption_data(d2d_key, ch_sock)
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            self.mr.unassisted_time += time_check(t)
-            print(Fore.MAGENTA+"UNASSISTED D2D TIME: ",
-                  self.mr.unassisted_time, Fore.WHITE)
-        # ----------------------------------------------------------
         return ch_sock
 
     def unassisted_d2d(self, ch_sock, old_key):
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            t = time.time()
-        # ----------------------------------------------------------
         d2d_key = self.mr.gen_new_key(ch_sock, old_key)
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            self.mr.unassisted_time += time_check(t)
-            print(Fore.MAGENTA+"UNASSISTED D2D TIME: ",
-                  self.mr.unassisted_time, Fore.WHITE)
-        # ----------------------------------------------------------
         self.mr.recv_d2d_data(ch_sock, d2d_key)
         self.mr.send_d2d_data(ch_sock, d2d_key)
         print("Closing connection with ch")
@@ -283,23 +216,10 @@ class Device():
             # crypto settings
             self.enc_key = b'Sixteen byte key'
             self.nonce = b'a'*11
-
-            # first encryption takes longer time for some reason,
-            # so the following line is useless, but for evaluation purposes
-            if not __debug__:
-                self.cipher = AES.new(self.enc_key, AES.MODE_CCM, self.nonce)
-
-            # ----------------------- time check -----------------------
-            if not __debug__:
-                t = time.time()
-            # ----------------------------------------------------------
-            self.cipher = AES.new(self.enc_key, AES.MODE_CCM, self.nonce)
-
             # hash settings
             # using sha256 hash
             self.hash_fun = hashlib.sha256()
             # first token is the first 16 bits (2 bytes) of sha256(key||cluster__head_address)
-
             # set dictionary with the keys of the sensors and bts
             self.token_dict = {}
             for i in range(SENS_NUM):
@@ -309,10 +229,6 @@ class Device():
             self.token_dict[self.hash_fun.digest()[:ID_LEN]] = 'base_station'
             reset_hash(self, b'Gianmarco Arthur'+str(OWN_PORT).encode())
             self.token_dict[self.hash_fun.digest()[:ID_LEN]] = 'sens0'
-            # ----------------------- time check -----------------------
-            if not __debug__:
-                self.computation_time += time_check(t)
-            # ----------------------------------------------------------
             if not __debug__:
                 print('---------------------')
                 print(self.token_dict)
@@ -322,24 +238,15 @@ class Device():
             self.resumption_table = {}
 
         def send_ack_of_wuc(self, token):
-            # ----------------------- time check -----------------------
-            if not __debug__:
-                t = time.time()
-            # ----------------------------------------------------------
             # the ACK is the h(token||sequence) where sequence is a fixed sequence
             # of bits pre-shared by the parties. Here we choose to use the byte 'X'
             reset_hash(self, token+b'X')
             ack = self.hash_fun.digest()[:ID_LEN]
-            # ----------------------- time check -----------------------
-            if not __debug__:
-                self.computation_time += time_check(t)
-            # ----------------------------------------------------------
             print('sending ack of the token ...')
             send_value(self.socket, ack)
 
         def recv_notification(self):
             data = recv_value(self.socket, BLOCK_LEN*2+NONCE_LEN)
-
             # first encryption takes longer time for some reason,
             # so the following line is useless, but for evaluation purposes
             if not __debug__:
@@ -347,11 +254,6 @@ class Device():
                 self.cipher = reset_cipher(self.enc_key, tmp2)
                 msg = self.cipher.decrypt_and_verify(
                     tmp1[:BLOCK_LEN], tmp1[BLOCK_LEN:])
-
-            # ----------------------- time check -----------------------
-            if not __debug__:
-                t = time.time()
-            # ----------------------------------------------------------
             data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
             self.cipher = reset_cipher(self.enc_key, nonce)
             msg = self.cipher.decrypt_and_verify(
@@ -364,10 +266,6 @@ class Device():
             # ----------------------------------------------------
             # second byte received is the sequence number
             seq_num = msg[1:3]
-            # ----------------------- time check -----------------------
-            if not __debug__:
-                self.computation_time += time_check(t)
-            # ----------------------------------------------------------
             print(Fore.GREEN+"Sensor data : temp = ", temp,
                   ' | seq_num = ', int.from_bytes(seq_num, 'big'), Fore.WHITE)
             return temp, seq_num
@@ -378,20 +276,12 @@ class Device():
             send_value(self.socket, int.to_bytes(ack, 2, 'big'))
 
         def update_token(self, last_message, caller_id, old_token, wur):
-            # ----------------------- time check -----------------------
-            if not __debug__:
-                t = time.time()
-            # ----------------------------------------------------------
             self.token_dict.pop(old_token)
             reset_hash(self, old_token +
                        int.to_bytes(last_message, 1, 'big'))
             new_token = self.hash_fun.digest()[:ID_LEN]
             self.token_dict[new_token] = caller_id
             wur.token_dict = self.token_dict
-            # ----------------------- time check -----------------------
-            if not __debug__:
-                self.computation_time += time_check(t)
-            # ----------------------------------------------------------
             return new_token
 
         def recv_ticket_and_auth(self):

@@ -32,10 +32,8 @@ for i in range(N_NEIGHBORS):
     NODE_DICT[b'8081'][1].append(node_id)
 
 
-def kerberos_protocol(server):
-
-    # receive client ID and getting key and neighbors
-    client_id = recv_value(server.csocket, PORT_LEN)
+def recv_ID(socket):
+    client_id = recv_value(socket, PORT_LEN)
     print(Fore.RED+"Client ID: ", client_id, Fore.WHITE)
     client_params = NODE_DICT[client_id]
     k_a = client_params[0]
@@ -43,33 +41,29 @@ def kerberos_protocol(server):
     # TODO nonces update
     nonce = os.urandom(NONCE_LEN)
     cipher = AES.new(k_a, AES.MODE_CCM, nonce)
+    return cipher, neighbors, nonce
 
-    # send session key
+
+def send_skey(socket, cipher, nonce):
     s_key = os.urandom(KEY_LEN)
     if not __debug__:
         print('Session key: ', s_key)
     msg, mac = cipher.encrypt_and_digest(s_key)
     print('sending session key...')
-    send_value(server.csocket, msg+mac+nonce)
+    send_value(socket, msg+mac+nonce)
+    return s_key
 
-    # receive authenticator
-    data = recv_value(server.csocket, BLOCK_LEN*2+NONCE_LEN)
+
+def recv_auth(socket, s_key):
+    data = recv_value(socket, BLOCK_LEN*2+NONCE_LEN)
     data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
     s_cipher = reset_cipher(s_key, nonce)
     auth = s_cipher.decrypt_and_verify(data[:BLOCK_LEN], data[BLOCK_LEN:])
     auth = bytes_to_long(unpad(auth, BLOCK_LEN))
+    return auth
 
-    print(Fore.RED+"Authenticator: ", auth, Fore.WHITE)
-    if not is_auth_valid(auth):
-        print("ERROR")
-        exit(0)
-        # handle error
 
-    # send IDs and keys
-    # ----------------------- time check -----------------------
-    if not __debug__:
-        t = time.time()
-    # ----------------------------------------------------------
+def send_IDs_and_Keys(socket, neighbors, s_key):
     s_cipher, nonce = reset_cipher(s_key)  # reset cipher
     if not __debug__:
         print(neighbors)
@@ -80,56 +74,37 @@ def kerberos_protocol(server):
     if not __debug__:
         print(keys)
     data = b''.join(neighbors)+b''.join(keys)
-
     msg, mac = s_cipher.encrypt_and_digest(pad(data, BLOCK_LEN))
     print('sending ids and keys...')
-    # ----------------------- time check -----------------------
-    if not __debug__:
-        print(Fore.MAGENTA+f"COMPUTATION TIME WITH {N_NEIGHBORS+1} NEIGHBORS: ",
-              time_check(t), Fore.WHITE)
-    # ----------------------------------------------------------
-    send_value(server.csocket, msg+mac+nonce)
+    send_value(socket, msg+mac+nonce)
     print("Client at ", clientAddress, " disconnected...")
+    return keys
 
-    # wait input before wake up
-    # input()
 
-    # wake up neighbor
-    nsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    nsocket.connect((LOCALHOST, N_PORT))
-
+def wakeup(socket):
     print('Waking up ', LOCALHOST, ':', N_PORT)
-    # token of the neghbor TODO implement a table for all neighbors? TODO Implement token update?
     # send token
     n_token_key = b'a'*KEY_LEN
     hasher = hashlib.sha256()
     hasher.update(n_token_key+str(N_PORT).encode())
     n_token = hasher.digest()[:TOKEN_LEN]
-    send_value(nsocket, n_token)
+    send_value(socket, n_token)
+    return n_token
 
-    # receive ack
-    ack = recv_value(nsocket, 2)
+
+def recv_ack(socket, n_token):
+    ack = recv_value(socket, 2)
     print(Fore.BLUE+"ACK: ", ack, Fore.WHITE)
     hasher = hashlib.sha256()
     hasher.update(n_token+SECRET_SEQ)
     expected_ack = hasher.digest()[:ACK_LEN]
     if ack != expected_ack:
         print("ACK not correct")
-        exit(0)
+        exit(1)
 
-    # send ticket and auth
-    k_ab = keys[0]
-    print('Sending ticket and auth')
-    ticket = pad(b'8081'+k_ab, BLOCK_LEN)
-    # take the key of the neighbor
-    k_b = NODE_DICT[neighbors[0]][0]
-    t_cipher, nonce = reset_cipher(k_b)
-    auth = pad(long_to_bytes(time.time()), BLOCK_LEN)
-    ticket, tag = t_cipher.encrypt_and_digest(ticket+auth)
-    send_value(nsocket, ticket+tag+nonce)
 
-    # receive ack
-    data = recv_value(nsocket, BLOCK_LEN*2+NONCE_LEN)
+def recv_ack2(socket, k_ab, auth):
+    data = recv_value(socket, BLOCK_LEN*2+NONCE_LEN)
     data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
     a_cipher = reset_cipher(k_ab, nonce)
     ack = a_cipher.decrypt_and_verify(data[:BLOCK_LEN], data[BLOCK_LEN:])
@@ -138,8 +113,46 @@ def kerberos_protocol(server):
     auth = bytes_to_long(unpad(auth, BLOCK_LEN))
     if ack != (auth+1):
         print('Wrong authenticator')
-        exit(0)
+        exit(1)
 
+
+def send_ticket(socket, keys, neighbors):
+    k_ab = keys[0]
+    print('Sending ticket and auth')
+    ticket = pad(b'8081'+k_ab, BLOCK_LEN)
+    # take the key of the neighbor
+    k_b = NODE_DICT[neighbors[0]][0]
+    t_cipher, nonce = reset_cipher(k_b)
+    auth = pad(long_to_bytes(time.time()), BLOCK_LEN)
+    ticket, tag = t_cipher.encrypt_and_digest(ticket+auth)
+    send_value(socket, ticket+tag+nonce)
+    return k_ab, auth
+
+
+def kerberos_protocol(server):
+    # receive client ID and getting key and neighbors
+    cipher, neighbors, nonce = recv_ID(server.csocket)
+    # send session key
+    s_key = send_skey(server.csocket, cipher, nonce)
+    # receive authenticator
+    auth = recv_auth(server.csocket, s_key)
+    print(Fore.RED+"Authenticator: ", auth, Fore.WHITE)
+    if not is_auth_valid(auth):
+        print("ERROR")
+        exit(0)
+        # handle error
+    # send IDs and keys
+    keys = send_IDs_and_Keys(server.csocket, neighbors, s_key)
+    # wake up neighbor
+    nsocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    nsocket.connect((LOCALHOST, N_PORT))
+    n_token = wakeup(nsocket)
+    # receive ack
+    recv_ack(nsocket, n_token)
+    # send ticket and auth
+    k_ab, auth = send_ticket(nsocket, keys, neighbors)
+    # receive ack2
+    recv_ack2(nsocket, k_ab, auth)
     print('Connection with ', LOCALHOST, ':', N_PORT, ' closed')
     nsocket.close()
 
@@ -153,16 +166,7 @@ class ClientThread(threading.Thread):
 
     def run(self):
         print("Connection from : ", clientAddress)
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            t = time.time()
-        # ----------------------------------------------------------
         kerberos_protocol(self)
-        # ----------------------- time check -----------------------
-        if not __debug__:
-            print(Fore.MAGENTA+"ASSISTED D2D TIME: ",
-                  time_check(t), Fore.WHITE)
-        # ----------------------------------------------------------
         print()
 
 
