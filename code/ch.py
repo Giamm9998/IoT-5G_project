@@ -355,7 +355,7 @@ class Device():
             data, nonce = data[:-NONCE_LEN], data[-NONCE_LEN:]
             self.cipher = reset_cipher(self.enc_key, nonce)
             msg = self.cipher.decrypt_and_verify(
-                data[:BLOCK_LEN], data[BLOCK_LEN:])
+                data[:3], data[3:3+BLOCK_LEN])
             msg = unpad(msg, 16)
             # first byte received is the temperature
             temp = msg[0]

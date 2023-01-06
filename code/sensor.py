@@ -131,14 +131,14 @@ class Device():
             temp = int.to_bytes(randint(0, 40), 1, 'big')
             self.cipher, nonce = reset_cipher(self.enc_key)
             seq_num = int.to_bytes(randint(0, 2**16-1), 2, 'big')
-            last_msg = pad(temp+seq_num, 16)
+            last_msg = temp+seq_num
 
             enc, tag = self.cipher.encrypt_and_digest(last_msg)
             # ----------------------- time check -----------------------
             if not __debug__:
                 self.computation_time += time_check(t)
             # ----------------------------------------------------------
-            print('sending alarm...')
+            print('sending notification...')
             send_value(self.socket, enc+tag+nonce)
             return temp, seq_num
 
